@@ -68,5 +68,6 @@ export function updateTileSize(state, canvasW, canvasH) {
   const availH = canvasH - 44 - 120;
   const tsW = Math.floor(availW / 12);
   const tsH = Math.floor(availH / 8);
-  state.tileSize = clamp(Math.min(tsW, tsH), 24, 56);
+  const baseSize = clamp(Math.min(tsW, tsH), 24, 56);
+  state.tileSize = clamp(baseSize * (state.zoomFactor || 1.0), 6, 220);
 }

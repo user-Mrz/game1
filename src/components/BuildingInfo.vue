@@ -13,6 +13,7 @@
     <div class="head">
       <span class="seal">{{ d.name }}</span>
       <span class="owner">{{ d.ownerName }}</span>
+      <span class="close-btn" @pointerdown.stop.prevent="close">×</span>
     </div>
     <div class="grid">
       <div class="item">
@@ -83,6 +84,10 @@ const props = defineProps({ game: Object });
 const d = computed(() => props.game.buildingDetail.value);
 const { cardEl, x, y, dragging, initWhenVisible, onDown, onMove, onUp } = useDraggableCard();
 
+function close() {
+  props.game.buildingDetail.value = null;
+}
+
 watch(d, (val) => initWhenVisible(!!val), { immediate: true });
 </script>
 
@@ -103,7 +108,14 @@ watch(d, (val) => initWhenVisible(!!val), { immediate: true });
 .head {
   display: flex; align-items: baseline; justify-content: space-between;
   border-bottom: 1px dotted rgba(0,0,0,0.25); padding-bottom: 6px; margin-bottom: 8px;
+  position: relative; padding-right: 20px;
 }
+.close-btn {
+  position: absolute; right: 0; top: -4px;
+  font-size: 20px; color: #999; cursor: pointer; line-height: 1;
+  font-family: sans-serif; user-select: none;
+}
+.close-btn:active { color: #333; }
 .seal {
   color: #0d0d0d; font-size: 17px; font-weight: bold;
   font-family: 'Ma Shan Zheng',cursive; letter-spacing: 2px;

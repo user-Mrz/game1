@@ -22,6 +22,7 @@ export function createGameState(mapW = 500, mapH = 500) {
     selectedBuilding: null,
     viewCX: 0, viewCY: 0,
     tileSize: 40,
+    zoomFactor: 1.0,
     phase: 'menu',
     actionMsg: '',
     aiThinking: false,
@@ -180,7 +181,8 @@ export function endTurn(state, renderFn, updateUIFn, onGameOver) {
   }
 
   // 同一回合内静默结算所有存活AI：不渲染、不停顿、不展示AI行动，结算完直接进入下一回合
-  const ais = state.players.filter(p => p.alive && !p.isHuman);
+  // 教学关卡无AI结算，直接进入下一回合
+  const ais = state.tutorialMode ? [] : state.players.filter(p => p.alive && !p.isHuman);
   state.aiThinking = true;
   for (const ai of ais) {
     state.currentPlayer = ai.index;

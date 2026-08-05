@@ -1,5 +1,5 @@
 <template>
-  <div class="game-view">
+  <div class="game-view" @wheel="game.onWheel">
     <!-- 主游戏画布 -->
     <canvas
       ref="gameCanvasEl"
@@ -7,6 +7,7 @@
       @pointerdown.prevent="onDown"
       @pointermove="onMove"
       @pointerup="onUp"
+      @contextmenu.prevent="onContextMenu"
     ></canvas>
 
     <!-- 小地图 -->
@@ -39,6 +40,7 @@
     <UnitInfo :game="game" />
     <BuildingInfo :game="game" />
     <BuildMenu :game="game" />
+    <TutorialOverlay :game="game" />
   </div>
 </template>
 
@@ -49,6 +51,7 @@ import BottomPanel from './BottomPanel.vue';
 import UnitInfo from './UnitInfo.vue';
 import BuildingInfo from './BuildingInfo.vue';
 import BuildMenu from './BuildMenu.vue';
+import TutorialOverlay from './TutorialOverlay.vue';
 
 const props = defineProps({ game: Object });
 
@@ -86,11 +89,13 @@ watch(() => props.game.bigMapVisible.value, (val) => {
 function onDown(e) { props.game.onPointerDown(e); }
 function onMove(e) { props.game.onPointerMove(e); }
 function onUp(e) { props.game.onPointerUp(e); }
+function onContextMenu(e) { props.game.onContextMenu(e); }
 </script>
 
 <style scoped>
-.game-view { position: fixed; inset: 0; }
-.game-canvas { position: absolute; top: 0; left: 0; display: block; }
+.game-view { position: fixed; inset: 0; touch-action: none; user-select: none; }
+.game-canvas { position: absolute; top: 0; left: 0; display: block; touch-action: none; cursor: grab; }
+.game-canvas:active { cursor: grabbing; }
 
 .minimap-canvas {
   position: fixed; right: 4px; top: 50px; width: 80px; height: 80px;

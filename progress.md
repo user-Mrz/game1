@@ -163,3 +163,8 @@
 - 移除 index.html 与 App.vue 中的 Google Fonts 外部引用（fonts.googleapis/gstatic），改用系统字体栈
 - 修复国内网络下手机页面白屏/加载超时；同时满足 TapTap H5 自包含包体要求
 - 验证：构建产物无任何外部字体引用
+
+## 2026-08-05 (GitHub v0.1 发布)
+- 初始化 git 仓库（main 分支），新增 .gitignore 排除依赖/构建产物/日志
+- 提交 v0.1（51 文件，5964 行），打标签 v0.1
+- 推送到 https://github.com/user-Mrz/game1.git（main + v0.1 标签），已确认远程可见

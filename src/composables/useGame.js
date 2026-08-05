@@ -16,12 +16,17 @@ import { UNIT_TYPES, BUILDING_TYPES, BARRACKS_TYPE_MAP } from '../game/config.js
 import { TERRAIN } from '../game/config.js';
 import { saveApi } from '../api/saveApi.js';
 import { serializeGameState, deserializeGameState } from '../game/save.js';
+import { TUTORIAL_STEPS } from '../game/tutorial.js';
+import { useSettings } from './useSettings.js';
 
 export function useGame() {
   // Canvas refs (set by GameView)
   const gameCanvas = shallowRef(null);
   const minimapCanvas = shallowRef(null);
   const bigMapCanvas = shallowRef(null);
+
+  // 一次性获取设置服务，避免 onKeydown 中重复创建闭包
+  const settingsService = useSettings();
 
   // 游戏状态 — markRaw 防止 Vue 深度代理
   const state = markRaw(createGameState());
@@ -56,11 +61,19 @@ export function useGame() {
   const unitDetail = ref(null);
   const buildingDetail = ref(null);
   const isPlacing = ref(false);
+  const tutorialActive = ref(false);
+  const tutorialDone = ref(false);
+  const tutorialStep = ref(0);
+  let tutorialInitialUnits = 0;
+  let tutorialInitialFarms = 0;
 
   // 大地图状态
   const bigMapVisible = ref(false);
   const bigMapW = ref(0);
   const bigMapH = ref(0);
+
+  // 缩放状态
+  const zoomFactor = ref(1.0);
 
   // 点击状态
   let touchStartTime = 0, touchStartX = 0, touchStartY = 0;
@@ -86,77 +99,25 @@ export function useGame() {
     isHumanTurn.value = hp ? state.currentPlayer === hp.index : false;
     btnEndTurnDisabled.value = !isHumanTurn.value || state.aiThinking;
 
-    // 单位/建筑信息
+    // 单位/建筑信息（仅在右键查看时显示，左键选择时不显示卡片）
     const selUnit = state.selectedUnitId ? state.units.find(u => u.id === state.selectedUnitId) : null;
     if (selUnit) {
       const cfg = UNIT_TYPES[selUnit.type];
-      buildingDetail.value = null;
       const maxHp = cfg.troops * cfg.hpPerTroop;
       const hp = selUnit.troops * cfg.hpPerTroop;
       const atkPower = selUnit.troops * cfg.atkPerTroop;
       unitInfoText.value = `${cfg.name} 兵力:${selUnit.troops} | 血量:${hp}/${maxHp} | 攻击力:${atkPower} | 粮草:${selUnit.supplies}/${cfg.foodCap} | 移动:${selUnit.moved ? '已用' : '可用'} | 攻击:${selUnit.attacked ? '已用' : '可用'}`;
-      unitDetail.value = {
-        name: cfg.name,
-        type: selUnit.type,
-        troops: selUnit.troops,
-        maxTroops: cfg.troops,
-        hp,
-        maxHp,
-        atkPower,
-        atkRange: cfg.atkRange,
-        move: cfg.move,
-        supplies: selUnit.supplies,
-        foodCap: cfg.foodCap,
-        moved: selUnit.moved,
-        attacked: selUnit.attacked,
-        ownerName: state.players[selUnit.owner]?.name || '',
-        note: selUnit.type === 'supply' ? '可为相邻友军补充粮草 · 站上己方粮仓可补充储备' : '',
-      };
+      // 不再自动设置 unitDetail，让左键选择不显示信息卡片
       btnSkipDisabled.value = !isHumanTurn.value || state.aiThinking;
     } else if (state.selectedBuilding) {
-      unitDetail.value = null;
       const b = getBuilding(state, state.selectedBuilding.x, state.selectedBuilding.y);
       if (b) {
         const bCfg = BUILDING_TYPES[b.type];
         unitInfoText.value = `${bCfg.name} HP:${b.hp}/${bCfg.hp} | 所属:${state.players[b.owner]?.name || '?'}`;
-        const ut = BARRACKS_TYPE_MAP[b.type] ? UNIT_TYPES[BARRACKS_TYPE_MAP[b.type]] : null;
-        const descMap = {
-          hq: '主营 · 被摧毁则战败',
-          farm: '农田 · 每回合产出粮草',
-          arrow_tower: '箭塔 · 自动攻击2格内敌军',
-          wall: '城墙 · 高耐久防御工事',
-          watchtower: '哨塔 · 扩大视野范围',
-          granary: '粮仓 · 单位站上后转化个人粮草补充储备',
-        };
-        buildingDetail.value = {
-          name: bCfg.name,
-          type: b.type,
-          hp: b.hp,
-          maxHp: bCfg.hp,
-          ownerName: state.players[b.owner]?.name || '?',
-          atk: bCfg.atk || 0,
-          atkRange: bCfg.atkRange || 0,
-          visionRadius: bCfg.visionRadius ?? 1,
-          foodPerTurn: bCfg.foodPerTurn || 0,
-          buildCost: bCfg.buildCost || 0,
-          desc: descMap[b.type] || '',
-          unit: ut ? {
-            name: ut.name,
-            troops: ut.troops,
-            hp: ut.troops * ut.hpPerTroop,
-            atk: ut.troops * ut.atkPerTroop,
-            foodCap: ut.foodCap,
-            move: ut.move,
-            atkRange: ut.atkRange,
-            buildCost: ut.buildCost,
-          } : null,
-        };
       }
       btnSkipDisabled.value = true;
     } else {
-      unitDetail.value = null;
-      buildingDetail.value = null;
-      unitInfoText.value = isHumanTurn.value ? '点击己方单位或建筑选择' : (state.aiThinking ? 'AI思考中...' : '等待中...');
+      unitInfoText.value = isHumanTurn.value ? '点击己方单位或建筑选择，右键查看信息' : (state.aiThinking ? 'AI思考中...' : '等待中...');
       btnSkipDisabled.value = true;
     }
 
@@ -189,6 +150,7 @@ export function useGame() {
     syncPhase();
     refreshUI();
     doRender();
+    checkTutorialProgress();
   }
 
   // ========== 游戏流程 ==========
@@ -196,6 +158,11 @@ export function useGame() {
   function startGame(mapSize, aiCount) {
     isCreating.value = true;
     setTimeout(() => {
+      tutorialActive.value = false;
+      tutorialDone.value = false;
+      state.tutorialMode = false;
+      state.zoomFactor = 1.0;
+      zoomFactor.value = 1.0;
       state.mapW = mapSize;
       state.mapH = mapSize;
       state.phase = 'playing';
@@ -256,8 +223,192 @@ export function useGame() {
     }, 100);
   }
 
+  // ========== 教学关卡 ==========
+
+  // 在主营附近找一块可通行、无建筑、无单位的格子
+  function findTutorialTile(state, cx, cy) {
+    const offsets = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]];
+    for (const [dx, dy] of offsets) {
+      const x = cx + dx, y = cy + dy;
+      if (x < 0 || y < 0 || x >= state.mapW || y >= state.mapH) continue;
+      if (state.terrain[y * state.mapW + x] === TERRAIN.MOUNTAIN) continue;
+      if (state.buildings.has(`${x},${y}`)) continue;
+      if (state.units.some(u => u.x === x && u.y === y)) continue;
+      return { x, y };
+    }
+    return null;
+  }
+
+  function startTutorial() {
+    isCreating.value = true;
+    setTimeout(() => {
+      state.zoomFactor = 1.0;
+      zoomFactor.value = 1.0;
+      state.mapW = 100;
+      state.mapH = 100;
+      state.phase = 'playing';
+      state.turn = 1;
+
+      initPlayers(state, 1, 1); // 1个人类 + 1个敌方靶子
+      state.terrain = generateTerrain(100, 100);
+      placeInitialBuildings(state);
+
+      // 清理人类玩家主营周围的山地
+      const hp = state.players[0];
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const nx = hp.hqX + dx, ny = hp.hqY + dy;
+          if (nx >= 0 && ny >= 0 && nx < state.mapW && ny < state.mapH &&
+              state.terrain[ny * state.mapW + nx] === TERRAIN.MOUNTAIN) {
+            state.terrain[ny * state.mapW + nx] = 0;
+          }
+        }
+      }
+
+      // 步兵 + 步兵营（主营旁）
+      const infTile = findTutorialTile(state, hp.hqX, hp.hqY);
+      if (infTile) spawnUnit(state, 0, 'infantry', infTile.x, infTile.y);
+      const barTile = findTutorialTile(state, hp.hqX, hp.hqY);
+      if (barTile) state.buildings.set(`${barTile.x},${barTile.y}`, { type: 'infantry_barracks', owner: 0, hp: 1000 });
+
+      // 敌方靶子（主营东侧约4格）
+      const enemyTile = findTutorialTile(state, hp.hqX + 4, hp.hqY)
+        || findTutorialTile(state, hp.hqX - 4, hp.hqY)
+        || findTutorialTile(state, hp.hqX, hp.hqY + 4);
+      if (enemyTile) {
+        const dummy = spawnUnit(state, 1, 'infantry', enemyTile.x, enemyTile.y);
+        dummy.troops = 50;
+      }
+
+      hp.food = 5000;
+      state.tutorialMode = true;
+      tutorialActive.value = true;
+      tutorialDone.value = false;
+      tutorialStep.value = 0;
+      tutorialInitialUnits = state.units.filter(u => u.owner === 0).length;
+      tutorialInitialFarms = [...state.buildings.values()].filter(b => b.owner === 0 && b.type === 'farm').length;
+
+      updateAllExplored(state);
+      centerViewOn(state, hp.hqX, hp.hqY);
+      isCreating.value = false;
+      syncAndRender();
+
+      startTurn(state, doRender, refreshUI, (won) => {
+        gameOverTitle.value = won ? '旗开得胜' : '全军覆没';
+        gameOverMsg.value = won ? '运筹帷幄之中，决胜千里之外。' : '主帅已殁，大势已去。';
+        gameOverVisible.value = true;
+        state.phase = 'over';
+        syncPhase();
+      });
+    }, 100);
+  }
+
+  // 根据玩家当前操作自动推进教学步骤
+  function checkTutorialProgress() {
+    if (!tutorialActive.value || tutorialDone.value) return;
+    const idx = tutorialStep.value;
+    const conditions = [
+      null, // 欢迎：手动下一步
+      () => state.selectedUnitId != null,
+      () => state.units.some(u => u.owner === 0 && u.moved),
+      () => state.selectedBuilding != null,
+      () => [...state.buildings.values()].filter(b => b.owner === 0 && b.type === 'farm').length > tutorialInitialFarms,
+      () => state.units.filter(u => u.owner === 0).length > tutorialInitialUnits,
+      () => state.turn > 1,
+      () => state.units.filter(u => u.owner !== 0).length === 0,
+      null,
+    ];
+    const cond = conditions[idx];
+    if (cond && cond()) {
+      tutorialStep.value = idx + 1;
+      if (tutorialStep.value >= TUTORIAL_STEPS.length - 1) {
+        tutorialDone.value = true;
+      }
+    }
+  }
+
+  function nextTutorialStep() {
+    if (!tutorialActive.value || tutorialDone.value) return;
+    tutorialStep.value = Math.min(tutorialStep.value + 1, TUTORIAL_STEPS.length - 1);
+    if (tutorialStep.value >= TUTORIAL_STEPS.length - 1) {
+      tutorialDone.value = true;
+    }
+    syncAndRender();
+  }
+
+  function skipTutorial() {
+    tutorialActive.value = false;
+    tutorialDone.value = false;
+    state.tutorialMode = false;
+    state.actionMsg = '已跳过教学，可自由游玩本局';
+    syncAndRender();
+  }
+
+  function finishTutorial(continuePlay) {
+    if (continuePlay) {
+      tutorialActive.value = false;
+      tutorialDone.value = false;
+      state.tutorialMode = false;
+      state.actionMsg = '教学完成！祝旗开得胜！';
+      syncAndRender();
+    } else {
+      location.reload();
+    }
+  }
+
   function restartGame() {
     location.reload();
+  }
+
+  // ========== 视角缩放 ==========
+
+  function applyZoom(factor) {
+    const minZ = 0.4, maxZ = 3.0;
+    const z = clamp(factor, minZ, maxZ);
+    state.zoomFactor = z;
+    zoomFactor.value = z;
+    // 重新计算 tileSize
+    const w = window.innerWidth, h = window.innerHeight;
+    updateTileSize(state, w, h);
+    clampViewToExplored();
+    doRender();
+  }
+
+  function zoomIn() {
+    applyZoom(state.zoomFactor * 1.2);
+  }
+
+  function zoomOut() {
+    applyZoom(state.zoomFactor / 1.2);
+  }
+
+  function setZoom(z) {
+    applyZoom(z);
+  }
+
+  function resetZoom() {
+    applyZoom(1.0);
+  }
+
+  function onWheel(e) {
+    if (state.phase !== 'playing') return;
+    if (state.aiThinking) return;
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 1.1 : 0.9;
+      applyZoom(state.zoomFactor * delta);
+      return;
+    }
+    // 普通滚轮 → 平移视角
+    e.preventDefault();
+    const panSpeed = 0.5 / state.tileSize;
+    if (e.shiftKey) {
+      state.viewCX += e.deltaY * panSpeed;
+    } else {
+      state.viewCY += e.deltaY * panSpeed;
+    }
+    clampViewToExplored();
+    doRender();
   }
 
   // ========== 玩家操作 ==========
@@ -295,46 +446,96 @@ export function useGame() {
     syncAndRender();
   }
 
-  // ========== 视野锁定 — 不能拖入纯黑区域 ==========
+  // ========== 视野锁定 — 限制视野范围 ==========
   function clampViewToExplored() {
-    const hp = state.players.find(p => p.isHuman && p.alive);
-    if (!hp) return;
-    const exp = state.explored[hp.index];
-    if (!exp) return;
-
-    // 计算当前视口覆盖的 tile 范围
     const w = window.innerWidth;
     const h = window.innerHeight;
-    updateTileSize(state, w, h);
     const ts = state.tileSize;
     const halfW = Math.ceil((w / ts) / 2) + 1;
     const halfH = Math.ceil(((h - 44 - 120) / ts) / 2) + 1;
 
-    // 搜索最近已探索区域边界
-    let minEx = Infinity, maxEx = -Infinity, minEy = Infinity, maxEy = -Infinity;
-    const margin = 8; // 允许看到探索区域边缘外一些
+    // 只做地图边界钳制，允许玩家自由拖动到任意位置
+    state.viewCX = clamp(state.viewCX, halfW, Math.max(halfW, state.mapW - halfW));
+    state.viewCY = clamp(state.viewCY, halfH, Math.max(halfH, state.mapH - halfH));
+  }
 
-    // 采样搜索已探索区域
-    const step = Math.max(1, Math.floor(state.mapW / 200));
-    for (let y = 0; y < state.mapH; y += step) {
-      for (let x = 0; x < state.mapW; x += step) {
-        if (exp[y * state.mapW + x]) {
-          if (x < minEx) minEx = x;
-          if (x > maxEx) maxEx = x;
-          if (y < minEy) minEy = y;
-          if (y > maxEy) maxEy = y;
-        }
-      }
+  // ========== 右键查看信息 ==========
+
+  function showInfo(tx, ty) {
+    if (tx < 0 || ty < 0 || tx >= state.mapW || ty >= state.mapH) return;
+
+    // 先查看是否有单位（优先显示单位信息）
+    const units = getUnitsAt(state, tx, ty);
+    if (units.length > 0) {
+      const unit = units[0];
+      const cfg = UNIT_TYPES[unit.type];
+      const maxHp = cfg.troops * cfg.hpPerTroop;
+      const hp = unit.troops * cfg.hpPerTroop;
+      const atkPower = unit.troops * cfg.atkPerTroop;
+      buildingDetail.value = null;
+      unitDetail.value = {
+        name: cfg.name,
+        type: unit.type,
+        troops: unit.troops,
+        maxTroops: cfg.troops,
+        hp,
+        maxHp,
+        atkPower,
+        atkRange: cfg.atkRange,
+        move: cfg.move,
+        supplies: unit.supplies,
+        foodCap: cfg.foodCap,
+        moved: unit.moved,
+        attacked: unit.attacked,
+        ownerName: state.players[unit.owner]?.name || '',
+        note: unit.type === 'supply' ? '可为相邻友军补充粮草 · 站上己方粮仓可补充储备' : '',
+      };
+      return;
     }
 
-    if (minEx === Infinity) return; // 没探索过任何区域（不可能）
+    // 查看建筑
+    const b = getBuilding(state, tx, ty);
+    if (b) {
+      const bCfg = BUILDING_TYPES[b.type];
+      const ut = BARRACKS_TYPE_MAP[b.type] ? UNIT_TYPES[BARRACKS_TYPE_MAP[b.type]] : null;
+      const descMap = {
+        hq: '主营 · 被摧毁则战败',
+        farm: '农田 · 每回合产出粮草',
+        arrow_tower: '箭塔 · 自动攻击2格内敌军',
+        wall: '城墙 · 高耐久防御工事',
+        watchtower: '哨塔 · 扩大视野范围',
+        granary: '粮仓 · 单位站上后转化个人粮草补充储备',
+      };
+      unitDetail.value = null;
+      buildingDetail.value = {
+        name: bCfg.name,
+        type: b.type,
+        hp: b.hp,
+        maxHp: bCfg.hp,
+        ownerName: state.players[b.owner]?.name || '?',
+        atk: bCfg.atk || 0,
+        atkRange: bCfg.atkRange || 0,
+        visionRadius: bCfg.visionRadius ?? 1,
+        foodPerTurn: bCfg.foodPerTurn || 0,
+        buildCost: bCfg.buildCost || 0,
+        desc: descMap[b.type] || '',
+        unit: ut ? {
+          name: ut.name,
+          troops: ut.troops,
+          hp: ut.troops * ut.hpPerTroop,
+          atk: ut.troops * ut.atkPerTroop,
+          foodCap: ut.foodCap,
+          move: ut.move,
+          atkRange: ut.atkRange,
+          buildCost: ut.buildCost,
+        } : null,
+      };
+      return;
+    }
 
-    // 视口不能超出探索范围太多
-    state.viewCX = clamp(state.viewCX, minEx - halfW + margin, maxEx + halfW - margin);
-    state.viewCY = clamp(state.viewCY, minEy - halfH + margin, maxEy + halfH - margin);
-    // 也不能超出地图边界
-    state.viewCX = clamp(state.viewCX, halfW, state.mapW - halfW);
-    state.viewCY = clamp(state.viewCY, halfH, state.mapH - halfH);
+    // 点击空白处，关闭信息卡片
+    unitDetail.value = null;
+    buildingDetail.value = null;
   }
 
   // ========== 点击处理 ==========
@@ -344,6 +545,15 @@ export function useGame() {
     const hp = state.players.find(p => p.isHuman && p.alive);
     if (!hp || state.currentPlayer !== hp.index) return;
 
+    // 点击空白处关闭信息卡片
+    const clickedUnit = getUnitsAt(state, tx, ty).find(u => u.owner === hp.index);
+    const clickedBuilding = getBuilding(state, tx, ty);
+    const isOwnBuilding = clickedBuilding && clickedBuilding.owner === hp.index;
+    if (!clickedUnit && !clickedBuilding) {
+      unitDetail.value = null;
+      buildingDetail.value = null;
+    }
+
     // 放置模式优先
     if (pendingBuildType) {
       // 连续建造：放不了也不退出放置模式，提示原因即可
@@ -351,27 +561,10 @@ export function useGame() {
       return;
     }
 
-    const clickedUnit = getUnitsAt(state, tx, ty).find(u => u.owner === hp.index);
-    const clickedBuilding = getBuilding(state, tx, ty);
-    const isOwnBuilding = clickedBuilding && clickedBuilding.owner === hp.index;
-
     // 移动已选中单位
     if (state.selectedUnitId && !clickedUnit) {
       const selUnit = state.units.find(u => u.id === state.selectedUnitId);
-      if (selUnit && !selUnit.moved) {
-        const reachable = getReachableTiles(state, selUnit, hp.index);
-        if (reachable.has(`${tx},${ty}`) && (tx !== selUnit.x || ty !== selUnit.y)) {
-          moveUnit(state, selUnit, tx, ty);
-          state.actionMsg = `${UNIT_TYPES[selUnit.type].name}移动到(${tx},${ty})`;
-          updateAllExplored(state);
-          // 自动攻击
-          checkAutoAttack(selUnit);
-          syncAndRender();
-          return;
-        }
-      }
-
-      // 攻击敌人
+      // 攻击敌人（优先于移动，避免点击敌方格子时移动上去）
       if (selUnit && !selUnit.attacked) {
         const enemies = getUnitsAt(state, tx, ty).filter(u => u.owner !== hp.index);
         if (enemies.length > 0 && canAttack(state, selUnit, enemies[0])) {
@@ -384,6 +577,19 @@ export function useGame() {
         if (clickedBuilding && clickedBuilding.owner !== hp.index && canAttackBuilding(state, selUnit, tx, ty)) {
           resolveBuildingCombat(state, selUnit, tx, ty);
           updateAllExplored(state);
+          syncAndRender();
+          return;
+        }
+      }
+
+      if (selUnit && !selUnit.moved) {
+        const reachable = getReachableTiles(state, selUnit, hp.index);
+        if (reachable.has(`${tx},${ty}`) && (tx !== selUnit.x || ty !== selUnit.y)) {
+          moveUnit(state, selUnit, tx, ty);
+          state.actionMsg = `${UNIT_TYPES[selUnit.type].name}移动到(${tx},${ty})`;
+          updateAllExplored(state);
+          // 自动攻击
+          checkAutoAttack(selUnit);
           syncAndRender();
           return;
         }
@@ -636,6 +842,10 @@ export function useGame() {
 
   async function saveCurrentGame() {
     const hp = state.players.find(p => p.isHuman && p.alive);
+    if (state.tutorialMode) {
+      saveMsg.value = '教学关卡无需存档';
+      return;
+    }
     if (!hp || state.currentPlayer !== hp.index || state.aiThinking || state.phase !== 'playing') {
       saveMsg.value = '只能在己方回合内存档';
       return;
@@ -660,6 +870,10 @@ export function useGame() {
   // 返回主界面：确认后自动保存当前进度，再回到主菜单（可读档继续）
   function returnToMenu() {
     if (!window.confirm('确定返回主界面吗？将自动保存当前进度。')) return;
+    if (state.tutorialMode) {
+      location.reload();
+      return;
+    }
     const hp = state.players.find(p => p.isHuman && p.alive);
     const canSave = hp && state.phase === 'playing' && state.currentPlayer === hp.index && !state.aiThinking;
     if (canSave) {
@@ -708,6 +922,11 @@ export function useGame() {
   }
 
   function applyLoadedState(loaded) {
+    state.tutorialMode = false;
+    tutorialActive.value = false;
+    tutorialDone.value = false;
+    state.zoomFactor = loaded.zoomFactor || 1.0;
+    zoomFactor.value = state.zoomFactor;
     state.mapW = loaded.mapW;
     state.mapH = loaded.mapH;
     state.terrain = loaded.terrain;
@@ -802,6 +1021,13 @@ export function useGame() {
     }
   }
 
+  // ========== 右键查看信息 ==========
+  function onContextMenu(e) {
+    if (state.phase !== 'playing') return;
+    const { x, y } = screenToWorld(state, e.clientX, e.clientY, window.innerWidth, window.innerHeight);
+    showInfo(x, y);
+  }
+
   // ========== 小地图 → 点击打开大地图 ==========
   function onMinimapClick(e) {
     if (state.phase !== 'playing') return;
@@ -870,13 +1096,22 @@ export function useGame() {
       clearSelection();
       return;
     }
+
+    const action = settingsService.getActionForKey(e.key);
+    if (!action) return;
+
     const speed = 3;
-    switch (e.key) {
-      case 'ArrowUp': state.viewCY -= speed; clampViewToExplored(); doRender(); break;
-      case 'ArrowDown': state.viewCY += speed; clampViewToExplored(); doRender(); break;
-      case 'ArrowLeft': state.viewCX -= speed; clampViewToExplored(); doRender(); break;
-      case 'ArrowRight': state.viewCX += speed; clampViewToExplored(); doRender(); break;
-      case 'e': playerEndTurn(); break;
+    switch (action) {
+      case 'moveUp': state.viewCY -= speed; clampViewToExplored(); doRender(); break;
+      case 'moveDown': state.viewCY += speed; clampViewToExplored(); doRender(); break;
+      case 'moveLeft': state.viewCX -= speed; clampViewToExplored(); doRender(); break;
+      case 'moveRight': state.viewCX += speed; clampViewToExplored(); doRender(); break;
+      case 'endTurn': playerEndTurn(); break;
+      case 'build': showBuildMenu(); break;
+      case 'bigMap': toggleBigMap(); break;
+      case 'zoomIn': zoomIn(); break;
+      case 'zoomOut': zoomOut(); break;
+      case 'resetZoom': resetZoom(); break;
     }
   }
 
@@ -894,6 +1129,9 @@ export function useGame() {
     unitDetail,
     buildingDetail,
     isPlacing,
+    tutorialActive, tutorialDone, tutorialStep,
+    // 缩放
+    zoomFactor,
     // 大地图
     bigMapVisible, bigMapW, bigMapH,
     // 方法
@@ -903,8 +1141,12 @@ export function useGame() {
     openSaveMenu, closeSaveMenu, switchSaveMode, refreshSaveList,
     saveCurrentGame, loadSave, deleteSave,
     returnToMenu,
+    startTutorial, nextTutorialStep, skipTutorial, finishTutorial,
     onPointerDown, onPointerMove, onPointerUp,
-    onMinimapClick, onKeydown,
+    onContextMenu,
+    onMinimapClick, onKeydown, onWheel,
+    showInfo,
+    zoomIn, zoomOut, setZoom, resetZoom,
     syncAndRender, doRender,
     // 大地图方法
     toggleBigMap, closeBigMap, drawBigMap,

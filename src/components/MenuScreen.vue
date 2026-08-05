@@ -21,15 +21,19 @@
     <button class="start-btn" @click="$emit('start', mapSize, aiCount)" :disabled="isCreating">
       {{ isCreating ? '挥毫泼墨，绘就山河...' : '进 入 战 局' }}
     </button>
+    <button class="tutorial-btn" @click="$emit('tutorial')" :disabled="isCreating">新 手 教 学</button>
     <button class="load-btn" @click="$emit('load')" :disabled="isCreating">读 取 存 档</button>
+    <button class="settings-btn" @click="s.settingsPanelVisible.value = true">⚙ 快捷键设置</button>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue';
-defineEmits(['start', 'load']);
+import { useSettings } from '../composables/useSettings.js';
+defineEmits(['start', 'load', 'tutorial']);
 defineProps({ isCreating: Boolean });
 
+const s = useSettings();
 const mapSize = ref(500);
 const aiCount = ref(3);
 </script>
@@ -94,4 +98,22 @@ select:focus { border-color: #0d0d0d; }
 }
 .load-btn:active { transform: scale(0.96); background: #e8e8e0; }
 .load-btn:disabled { opacity: 0.4; }
+.tutorial-btn {
+  margin-top: 14px; padding: 10px 40px; border-radius: 2px;
+  background: #fff; color: #b03028; border: 1px solid #b03028;
+  font-family: 'Ma Shan Zheng','ZCOOL XiaoWei','STKaiti','KaiTi',cursive;
+  font-size: 16px; letter-spacing: 4px; cursor: pointer;
+  transition: all 0.2s;
+}
+.tutorial-btn:active { transform: scale(0.96); background: #faf0f0; }
+.tutorial-btn:disabled { opacity: 0.4; }
+.settings-btn {
+  margin-top: 14px; padding: 8px 30px; border-radius: 2px;
+  background: transparent; color: #555; border: 1px solid #aaa;
+  font-family: 'Noto Serif SC', serif;
+  font-size: 14px; letter-spacing: 2px; cursor: pointer;
+  transition: all 0.2s;
+}
+.settings-btn:hover { color: #0d0d0d; border-color: #0d0d0d; background: #f5f2ea; }
+.settings-btn:active { transform: scale(0.96); }
 </style>

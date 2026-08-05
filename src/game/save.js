@@ -14,6 +14,7 @@ export function serializeGameState(state) {
     viewCX: state.viewCX,
     viewCY: state.viewCY,
     tileSize: state.tileSize,
+    zoomFactor: state.zoomFactor,
     terrain: Array.from(state.terrain),
     explored: state.explored.map(e => Array.from(e)),
     buildings: Array.from(state.buildings.entries()).map(([k, v]) => ({
