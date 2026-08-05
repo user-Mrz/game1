@@ -168,3 +168,10 @@
 - 初始化 git 仓库（main 分支），新增 .gitignore 排除依赖/构建产物/日志
 - 提交 v0.1（51 文件，5964 行），打标签 v0.1
 - 推送到 https://github.com/user-Mrz/game1.git（main + v0.1 标签），已确认远程可见
+
+## 2026-08-05 (后端回合结算，降低浏览器内存)
+- 分析内存热点：AI explored 数组（10玩家×2000×2000≈40MB）+ 结算期 BFS 临时分配
+- 后端新增 sim 模块：SimEngine 移植全部结算逻辑（AI/移动/战斗/经济/建筑/胜负），POST /api/sim/end-turn
+- 前端：simApi（terrain base64 + seed）、playerEndTurn 优先走后端（8s 超时本地兜底）、仅保留人类 explored
+- 验证：后端构建通过；JS/Java 同种子结算结果一致（含建筑攻占场景）；前端构建通过；2000×2000×10 玩家释放 34.3MB（详见 findings.md）
+- 下一步：可选把玩家移动寻路也搬到后端（降低单次操作瞬时内存，但增加每步网络延迟）

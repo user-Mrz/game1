@@ -15,6 +15,7 @@ import { canBuildOn, buildStructure, canProduce, produceUnit, demolishStructure 
 import { UNIT_TYPES, BUILDING_TYPES, BARRACKS_TYPE_MAP } from '../game/config.js';
 import { TERRAIN } from '../game/config.js';
 import { saveApi } from '../api/saveApi.js';
+import { simApi } from '../api/simApi.js';
 import { serializeGameState, deserializeGameState } from '../game/save.js';
 import { TUTORIAL_STEPS } from '../game/tutorial.js';
 import { useSettings } from './useSettings.js';
@@ -153,6 +154,24 @@ export function useGame() {
     checkTutorialProgress();
   }
 
+  function handleGameOver(won) {
+    gameOverTitle.value = won ? '旗开得胜' : '全军覆没';
+    gameOverMsg.value = won ? '运筹帷幄之中，决胜千里之外。' : '主帅已殁，大势已去。';
+    gameOverVisible.value = true;
+    state.phase = 'over';
+    syncPhase();
+  }
+
+  // 只保留人类玩家的探索视野数组；AI 视野已由后端结算，前端不再保留
+  function keepOnlyHumanExplored(s) {
+    const size = s.mapW * s.mapH;
+    s.explored = s.players.map(p => {
+      if (!p.isHuman) return null;
+      const exp = s.explored && s.explored[p.index];
+      return exp && exp.length === size ? exp : new Uint8Array(size);
+    });
+  }
+
   // ========== 游戏流程 ==========
 
   function startGame(mapSize, aiCount) {
@@ -213,13 +232,7 @@ export function useGame() {
       isCreating.value = false;
       syncAndRender();
 
-      startTurn(state, doRender, refreshUI, (won) => {
-        gameOverTitle.value = won ? '旗开得胜' : '全军覆没';
-        gameOverMsg.value = won ? '运筹帷幄之中，决胜千里之外。' : '主帅已殁，大势已去。';
-        gameOverVisible.value = true;
-        state.phase = 'over';
-        syncPhase();
-      });
+      startTurn(state, doRender, refreshUI, handleGameOver);
     }, 100);
   }
 
@@ -293,13 +306,7 @@ export function useGame() {
       isCreating.value = false;
       syncAndRender();
 
-      startTurn(state, doRender, refreshUI, (won) => {
-        gameOverTitle.value = won ? '旗开得胜' : '全军覆没';
-        gameOverMsg.value = won ? '运筹帷幄之中，决胜千里之外。' : '主帅已殁，大势已去。';
-        gameOverVisible.value = true;
-        state.phase = 'over';
-        syncPhase();
-      });
+      startTurn(state, doRender, refreshUI, handleGameOver);
     }, 100);
   }
 
@@ -418,13 +425,58 @@ export function useGame() {
     state.selectedUnitId = null;
     state.selectedBuilding = null;
     buildMenuVisible.value = false;
-    endTurn(state, doRender, refreshUI, (won) => {
-      gameOverTitle.value = won ? '旗开得胜' : '全军覆没';
-      gameOverMsg.value = won ? '运筹帷幄之中，决胜千里之外。' : '主帅已殁，大势已去。';
-      gameOverVisible.value = true;
+    runEndTurn();
+  }
+
+  // 回合结算：优先交给后端执行（省浏览器内存/CPU），后端不可用时回退本地结算
+  async function runEndTurn() {
+    if (state.tutorialMode) {
+      // 教学关无 AI，直接本地结算
+      endTurn(state, doRender, refreshUI, handleGameOver);
+      return;
+    }
+
+    state.aiThinking = true;
+    state.actionMsg = 'AI 结算中…';
+    refreshUI();
+    try {
+      const result = await simApi.endTurn(state);
+      applySimResult(result);
+    } catch {
+      // 后端不可用（未启动/超时）→ 本地结算兜底，行为与原来一致
+      state.aiThinking = false;
+      endTurn(state, doRender, refreshUI, handleGameOver);
+    }
+  }
+
+  // 应用后端结算结果；人类回合准备/视野更新/相机仍由 startTurn 完成
+  function applySimResult(result) {
+    state.players = result.players;
+    state.units = result.units;
+    state.buildings = new Map(
+      (result.buildings || []).map(b => [b.key, {
+        type: b.type,
+        owner: b.owner,
+        hp: b.hp,
+        lastHitBy: b.lastHitBy,
+      }])
+    );
+    state.currentPlayer = result.currentPlayer;
+    state.turn = result.turn;
+    state.nextUnitId = result.nextUnitId;
+    state.aiThinking = false;
+    state.actionMsg = result.actionMsg || '';
+    keepOnlyHumanExplored(state);
+
+    if (result.phase === 'over') {
       state.phase = 'over';
-      syncPhase();
-    });
+      state.winner = result.winner ?? null;
+      handleGameOver(!!state.players.find(p => p.isHuman && p.alive));
+      return;
+    }
+
+    state.phase = 'playing';
+    startTurn(state, doRender, refreshUI, handleGameOver);
   }
 
   function skipUnit() {
@@ -934,6 +986,9 @@ export function useGame() {
     state.buildings = loaded.buildings;
     state.players = loaded.players;
     state.units = loaded.units;
+    // 旧存档含所有 AI 视野数组（大图多 AI 时可达数十 MB），读档后立即裁剪；
+    // 必须在 players 赋值之后执行
+    keepOnlyHumanExplored(state);
     state.currentPlayer = loaded.currentPlayer;
     state.turn = loaded.turn;
     state.nextUnitId = loaded.nextUnitId;
@@ -952,13 +1007,7 @@ export function useGame() {
     // 若存档恰好在 AI 回合（一般不会），则按新回合流程启动
     const hp = state.players.find(p => p.isHuman && p.alive);
     if (hp && state.currentPlayer !== hp.index) {
-      startTurn(state, doRender, refreshUI, (won) => {
-        gameOverTitle.value = won ? '旗开得胜' : '全军覆没';
-        gameOverMsg.value = won ? '运筹帷幄之中，决胜千里之外。' : '主帅已殁，大势已去。';
-        gameOverVisible.value = true;
-        state.phase = 'over';
-        syncPhase();
-      });
+      startTurn(state, doRender, refreshUI, handleGameOver);
     }
   }
 

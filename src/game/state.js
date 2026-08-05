@@ -44,7 +44,9 @@ export function initPlayers(state, numHumans, numAI) {
       hqX: 0, hqY: 0,
     });
   }
-  state.explored = state.players.map(() => new Uint8Array(state.mapW * state.mapH));
+  // 只保留人类玩家的探索视野数组；AI 决策不依赖 explored（见 findings），
+  // 后端结算也不返回 AI 视野，前端渲染仅用人类视野 → 大图多 AI 时显著省内存
+  state.explored = state.players.map(p => (p.isHuman ? new Uint8Array(state.mapW * state.mapH) : null));
   state.currentPlayer = 0;
   state.turn = 1;
   state.units = [];
@@ -160,7 +162,7 @@ export function startTurn(state, renderFn, updateUIFn, onGameOver) {
   if (updateUIFn) updateUIFn();
 }
 
-export function endTurn(state, renderFn, updateUIFn, onGameOver) {
+export function endTurn(state, renderFn, updateUIFn, onGameOver, rand = Math.random) {
   checkBuildingDestroyed(state);
 
   const humanPlayer = state.players.find(p => p.isHuman);
@@ -187,7 +189,7 @@ export function endTurn(state, renderFn, updateUIFn, onGameOver) {
   for (const ai of ais) {
     state.currentPlayer = ai.index;
     preparePlayerTurn(state, ai.index);
-    aiTurn(state);
+    aiTurn(state, rand);
     checkBuildingDestroyed(state);
     updateAllExplored(state);
 

@@ -16,7 +16,7 @@ export function serializeGameState(state) {
     tileSize: state.tileSize,
     zoomFactor: state.zoomFactor,
     terrain: Array.from(state.terrain),
-    explored: state.explored.map(e => Array.from(e)),
+    explored: state.explored.map(e => (e ? Array.from(e) : null)),
     buildings: Array.from(state.buildings.entries()).map(([k, v]) => ({
       key: k, type: v.type, owner: v.owner, hp: v.hp,
       ...(v.lastHitBy !== undefined ? { lastHitBy: v.lastHitBy } : {}),
@@ -31,7 +31,7 @@ export function deserializeGameState(data) {
   return {
     ...data,
     terrain: data.terrain ? new Uint8Array(data.terrain) : null,
-    explored: (data.explored || []).map(e => new Uint8Array(e)),
+    explored: (data.explored || []).map(e => (e ? new Uint8Array(e) : null)),
     buildings: new Map(
       (data.buildings || []).map(b => [b.key, { type: b.type, owner: b.owner, hp: b.hp, lastHitBy: b.lastHitBy }])
     ),

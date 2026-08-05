@@ -7,13 +7,13 @@ import { getReachableTiles, moveUnit } from './movement.js';
 import { getUnitsAt } from './units.js';
 import { dist } from './utils.js';
 
-export function aiTurn(state) {
+export function aiTurn(state, rand = Math.random) {
   const playerIdx = state.currentPlayer;
   const player = state.players[playerIdx];
   if (!player || !player.alive) return;
 
   aiProduceUnits(state, playerIdx);
-  aiBuildStructures(state, playerIdx);
+  aiBuildStructures(state, playerIdx, rand);
   aiMoveAndAttack(state, playerIdx);
 }
 
@@ -37,7 +37,7 @@ function aiProduceUnits(state, playerIdx) {
   }
 }
 
-function aiBuildStructures(state, playerIdx) {
+function aiBuildStructures(state, playerIdx, rand = Math.random) {
   const player = state.players[playerIdx];
   if (player.food < 3000) return;
 
@@ -51,10 +51,10 @@ function aiBuildStructures(state, playerIdx) {
   }
   if (candidates.length === 0) return;
 
-  const pos = candidates[Math.floor(Math.random() * candidates.length)];
+  const pos = candidates[Math.floor(rand() * candidates.length)];
   const hasFarms = [...state.buildings.values()].filter(b => b.owner === playerIdx && b.type === 'farm').length;
   const buildOrder = hasFarms < 2 ? 'farm' :
-    (Math.random() < 0.4 ? 'arrow_tower' : (Math.random() < 0.5 ? 'infantry_barracks' : 'archer_barracks'));
+    (rand() < 0.4 ? 'arrow_tower' : (rand() < 0.5 ? 'infantry_barracks' : 'archer_barracks'));
 
   const cfg = BUILDING_TYPES[buildOrder];
   if (cfg.buildable && player.food >= cfg.buildCost + 2000) {
