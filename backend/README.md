@@ -10,11 +10,13 @@ Spring Boot 3.5.16 + JDK 21 + Maven 3.9.12 + MySQL 8.0，为前端 H5 战棋游�
 
 ## 数据库初始化
 
+可直接执行项目根目录的 [database/init.sql](../database/init.sql) 完成建库建表：
+
 ```sql
 CREATE DATABASE IF NOT EXISTS ink_game DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-表结构由 JPA 首次启动时自动创建（`ddl-auto: update`），无需手动建表。
+表结构默认由 JPA 首次启动时自动创建（`ddl-auto: update`），手动初始化时可执行 init.sql。
 
 ## 运行
 
