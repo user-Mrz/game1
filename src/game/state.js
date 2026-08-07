@@ -157,7 +157,10 @@ export function startTurn(state, renderFn, updateUIFn, onGameOver) {
   state.aiThinking = false;
   preparePlayerTurn(state, hp.index);
   updateAllExplored(state);
-  centerViewOnPlayer(state);
+  // 仅第一回合视角居中主营，后续回合保持上一回合视角
+  if (state.turn === 1) {
+    centerViewOnPlayer(state);
+  }
   renderFn();
   if (updateUIFn) updateUIFn();
 }
