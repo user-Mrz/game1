@@ -9,6 +9,7 @@ import { centerViewOnPlayer } from './camera.js';
 
 export function createGameState(mapW = 500, mapH = 500) {
   return {
+    gameId: 'g_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     mapW, mapH,
     terrain: null,
     buildings: null,
@@ -27,6 +28,8 @@ export function createGameState(mapW = 500, mapH = 500) {
     actionMsg: '',
     aiThinking: false,
     winner: null,
+    effects: [], // 视觉效果反馈队列
+    difficulty: 'easy', // 难度等级
   };
 }
 
@@ -119,6 +122,9 @@ function preparePlayerTurn(state, playerIdx) {
   for (const u of state.units) {
     if (u.owner === playerIdx && u.type === 'heavy_cavalry') {
       if (u.moveCD > 0) u.moveCD--;
+    }
+    if (u.owner === playerIdx && u.riverDelay > 0) {
+      u.riverDelay--;
     }
   }
 

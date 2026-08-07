@@ -18,12 +18,21 @@
         <option v-for="n in 9" :key="n" :value="n">{{ n }}个</option>
       </select>
     </div>
-    <button class="start-btn" @click="$emit('start', mapSize, aiCount)" :disabled="isCreating">
+    <div class="menu-item">
+      <label>难度</label>
+      <select v-model="difficulty">
+        <option value="easy">简单 — 普通AI，标准属性</option>
+        <option value="normal">普通 — 增强AI，属性+20%</option>
+        <option value="hard">困难 — 智能AI，属性+50%</option>
+        <option value="extreme">极难 — 巅峰AI，属性翻倍</option>
+      </select>
+    </div>
+    <button class="start-btn" @click="$emit('start', mapSize, aiCount, difficulty)" :disabled="isCreating">
       {{ isCreating ? '挥毫泼墨，绘就山河...' : '进 入 战 局' }}
     </button>
     <button class="tutorial-btn" @click="$emit('tutorial')" :disabled="isCreating">新 手 教 学</button>
     <button class="load-btn" @click="$emit('load')" :disabled="isCreating">读 取 存 档</button>
-    <button class="settings-btn" @click="s.settingsPanelVisible.value = true">⚙ 快捷键设置</button>
+    <button class="settings-btn" @click="s.settingsPanelVisible.value = true">快 捷 键 设 置</button>
   </div>
 </template>
 
@@ -36,14 +45,20 @@ defineProps({ isCreating: Boolean });
 const s = useSettings();
 const mapSize = ref(500);
 const aiCount = ref(3);
+const difficulty = ref('easy');
 </script>
 
 <style scoped>
 .menu-screen {
   position: fixed; inset: 0; z-index: 100;
-  background: linear-gradient(180deg, #fafaf7 0%, #f0ede5 50%, #fafaf7 100%);
+  background: url('/主界面.webp') center/cover no-repeat;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   border-left: 2px solid #333; border-right: 2px solid #333;
+}
+.menu-screen::after {
+  content: ''; position: absolute; inset: 0;
+  background: rgba(250,250,247,0.35);
+  pointer-events: none;
 }
 .menu-screen::before {
   content: ''; position: absolute; top: 20px; bottom: 20px; left: 12px; right: 12px;
@@ -108,12 +123,12 @@ select:focus { border-color: #0d0d0d; }
 .tutorial-btn:active { transform: scale(0.96); background: #faf0f0; }
 .tutorial-btn:disabled { opacity: 0.4; }
 .settings-btn {
-  margin-top: 14px; padding: 8px 30px; border-radius: 2px;
-  background: transparent; color: #555; border: 1px solid #aaa;
-  font-family: 'Noto Serif SC', serif;
-  font-size: 14px; letter-spacing: 2px; cursor: pointer;
+  margin-top: 14px; padding: 10px 40px; border-radius: 2px;
+  background: #fff; color: #0d0d0d; border: 1px solid #0d0d0d;
+  font-family: 'Ma Shan Zheng','ZCOOL XiaoWei','STKaiti','KaiTi',cursive;
+  font-size: 16px; letter-spacing: 4px; cursor: pointer;
   transition: all 0.2s;
 }
-.settings-btn:hover { color: #0d0d0d; border-color: #0d0d0d; background: #f5f2ea; }
-.settings-btn:active { transform: scale(0.96); }
+.settings-btn:hover { background: #f5f2ea; border-color: #b03028; color: #b03028; }
+.settings-btn:active { transform: scale(0.96); background: #e8e8e0; }
 </style>

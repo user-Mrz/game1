@@ -6,6 +6,7 @@ import { getReachableTiles } from './movement.js';
 import { canAttack, canRangedAttack, canRangedAttackBuilding } from './combat.js';
 import { getUnitById } from './units.js';
 import { updateTileSize, worldToScreen, clamp, getTerrain, getBuilding } from './utils.js';
+import { getBuildRadius } from './buildings.js';
 
 // 黑白调色盘
 const INK = {
@@ -72,18 +73,21 @@ export function render(state, canvas, minimapCanvas) {
 
       const terrain = getTerrain(state, tx, ty);
 
-      // 已探索但当前不可见：暗淡处理
+      // 已探索但当前不可见：显示灰暗地形，仅显示我方建筑（敌方建筑/单位隐藏）
       if (!visible) {
-        ctx.fillStyle = INK.DARK;
+        // 灰暗地形底色
+        ctx.fillStyle = TERRAIN_COLORS[terrain];
+        ctx.globalAlpha = 0.35;
         ctx.fillRect(sx, sy, ts, ts);
+        ctx.globalAlpha = 1;
         // 极暗网格
         ctx.strokeStyle = 'rgba(176,48,40,0.18)';
         ctx.lineWidth = 0.5;
         ctx.strokeRect(sx, sy, ts, ts);
 
-        // 已探索建筑仍显示（主营）
+        // 已探索建筑：仅显示我方建筑（敌方建筑隐藏）
         const building = getBuilding(state, tx, ty);
-        if (building && explored && building.type === 'hq') {
+        if (building && explored && building.owner === viewIdx) {
           drawBuildingGhost(ctx, sx, sy, ts, building);
         }
         continue;
@@ -234,12 +238,28 @@ export function render(state, canvas, minimapCanvas) {
   // 放置模式高亮 — 可建造的平原/沃土
   if (state.pendingBuildType && viewIdx === (humanPlayer?.index ?? -1)) {
     const cfg = BUILDING_TYPES[state.pendingBuildType];
+    const buildR = getBuildRadius(state);
+    const player = state.players[viewIdx];
+    if (player) {
+      // 建造范围圆圈（以主营为中心）
+      const hqS = worldToScreen(state, player.hqX, player.hqY, w, h);
+      const radiusPx = buildR * ts;
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeRect(hqS.x - radiusPx, hqS.y - radiusPx, radiusPx * 2, radiusPx * 2);
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(0,0,0,0.04)';
+      ctx.fillRect(hqS.x - radiusPx, hqS.y - radiusPx, radiusPx * 2, radiusPx * 2);
+    }
     for (let ty = startY; ty <= startY + tilesY; ty++) {
       for (let tx = startX; tx <= startX + tilesX; tx++) {
         if (tx < 0 || ty < 0 || tx >= state.mapW || ty >= state.mapH) continue;
         const explored = state.explored[viewIdx] ? state.explored[viewIdx][ty * state.mapW + tx] : 0;
         const visible = isVisibleToPlayer(state, tx, ty, viewIdx);
         if (!explored && !visible) continue;
+        // 检查是否在建造范围内
+        if (player && (Math.abs(tx - player.hqX) > buildR || Math.abs(ty - player.hqY) > buildR)) continue;
         // 检查是否可建造
         const t = getTerrain(state, tx, ty);
         if (t !== TERRAIN.PLAIN && t !== TERRAIN.FERTILE) continue;
@@ -256,7 +276,7 @@ export function render(state, canvas, minimapCanvas) {
       }
     }
     // 建造中提示
-    if (cfg) {
+    if (cfg && player) {
       ctx.fillStyle = 'rgba(250,250,247,0.92)';
       ctx.fillRect(0, h - 128, w, 26);
       ctx.strokeStyle = 'rgba(0,0,0,0.2)';
@@ -265,9 +285,12 @@ export function render(state, canvas, minimapCanvas) {
       ctx.fillStyle = INK.BLACK;
       ctx.font = '13px "Noto Serif SC","ZCOOL XiaoWei",serif';
       ctx.textAlign = 'center';
-      ctx.fillText(`放置${cfg.name} — 🌾${cfg.buildCost} — 点虚线格放置 · Esc取消`, w / 2, h - 112);
+      ctx.fillText(`放置${cfg.name} — 🌾${cfg.buildCost} — 建造范围${buildR}格 · 点虚线格放置 · Esc取消`, w / 2, h - 112);
     }
   }
+
+  // 视觉效果反馈
+  drawEffects(ctx, state, w, h, ts);
 
   // 小地图
   drawMinimap(state, minimapCanvas);
@@ -590,6 +613,100 @@ export function drawMapOverlay(state, canvas, cw, ch, isMini = false) {
   ctx.strokeStyle = isMini ? 'rgba(176,48,40,0.6)' : '#b03028';
   ctx.lineWidth = isMini ? 1 : 2;
   ctx.strokeRect(0, 0, cw, ch);
+}
+
+// ========== 视觉效果反馈 ==========
+function drawEffects(ctx, state, w, h, ts) {
+  if (!state.effects || state.effects.length === 0) return;
+  const now = performance.now();
+  for (const fx of state.effects) {
+    const elapsed = now - fx.startTime;
+    if (elapsed >= fx.duration) continue;
+    const progress = elapsed / fx.duration; // 0 → 1
+    const s = worldToScreen(state, fx.x, fx.y, w, h);
+
+    if (fx.type === 'attack') {
+      // 攻击：从攻击者到目标画一道墨线 + 目标处扩散红圈
+      const fromS = worldToScreen(state, fx.fromX, fx.fromY, w, h);
+      const alpha = 1 - progress;
+      // 墨线
+      ctx.strokeStyle = `rgba(176,48,40,${alpha * 0.8})`;
+      ctx.lineWidth = 3 * (1 - progress * 0.5);
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(fromS.x, fromS.y);
+      ctx.lineTo(s.x, s.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // 扩散红圈
+      const ringR = ts * (0.3 + progress * 0.8);
+      ctx.strokeStyle = `rgba(176,48,40,${alpha})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+      // 中心闪光
+      ctx.fillStyle = `rgba(176,48,40,${alpha * 0.3})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, ts * 0.3 * (1 - progress), 0, Math.PI * 2);
+      ctx.fill();
+    } else if (fx.type === 'ranged') {
+      // 远程攻击：弧线箭矢 + 目标处扩散圈
+      const fromS = worldToScreen(state, fx.fromX, fx.fromY, w, h);
+      const alpha = 1 - progress;
+      // 弧线箭矢
+      const midX = (fromS.x + s.x) / 2;
+      const midY = (fromS.y + s.y) / 2 - ts * 0.6;
+      ctx.strokeStyle = `rgba(176,48,40,${alpha * 0.9})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(fromS.x, fromS.y);
+      ctx.quadraticCurveTo(midX, midY, s.x, s.y);
+      ctx.stroke();
+      // 扩散圈
+      const ringR = ts * (0.2 + progress * 0.6);
+      ctx.strokeStyle = `rgba(176,48,40,${alpha})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (fx.type === 'move') {
+      // 移动：从起点到终点的墨迹拖尾
+      const fromS = worldToScreen(state, fx.fromX, fx.fromY, w, h);
+      const alpha = 1 - progress;
+      ctx.strokeStyle = `rgba(0,0,0,${alpha * 0.35})`;
+      ctx.lineWidth = ts * 0.15;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(fromS.x, fromS.y);
+      ctx.lineTo(s.x, s.y);
+      ctx.stroke();
+      // 起点淡圈
+      ctx.strokeStyle = `rgba(0,0,0,${alpha * 0.3})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(fromS.x, fromS.y, ts * 0.35 * (1 - progress * 0.5), 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (fx.type === 'build') {
+      // 建造：扩散墨环
+      const alpha = 1 - progress;
+      for (let i = 0; i < 2; i++) {
+        const p = Math.max(0, progress - i * 0.2);
+        if (p <= 0) continue;
+        const ringR = ts * (0.2 + p * 1.0);
+        ctx.strokeStyle = `rgba(0,0,0,${alpha * (1 - i * 0.4)})`;
+        ctx.lineWidth = 2.5 - i;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, ringR, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      // 中心墨点
+      ctx.fillStyle = `rgba(0,0,0,${alpha * 0.2})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, ts * 0.25 * (1 - progress), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 }
 
 // ========== 辅助 ==========

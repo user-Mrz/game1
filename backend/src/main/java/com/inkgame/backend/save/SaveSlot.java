@@ -10,16 +10,21 @@ import jakarta.persistence.Lob;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "game_save", indexes = @Index(name = "idx_updated_at", columnList = "updatedAt"))
+@Table(name = "game_save", indexes = @Index(name = "idx_updated_at", columnList = "updatedAt"),
+       uniqueConstraints = @UniqueConstraint(columnNames = "gameId"))
 public class SaveSlot {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(nullable = false, unique = true, length = 36)
+    private String gameId;
 
     @Column(nullable = false, length = 64)
     private String slotName;
@@ -33,8 +38,7 @@ public class SaveSlot {
     @Column(nullable = false, length = 16)
     private String phase;
 
-    @Lob
-    @Column(nullable = false, columnDefinition = "LONGTEXT")
+    @Column(nullable = false)
     private String stateJson;
 
     @Column(nullable = false, updatable = false)
@@ -60,6 +64,14 @@ public class SaveSlot {
 
     public void setId(Long id) {
         this.id = id;
+    }
+
+    public String getGameId() {
+        return gameId;
+    }
+
+    public void setGameId(String gameId) {
+        this.gameId = gameId;
     }
 
     public String getSlotName() {

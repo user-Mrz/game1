@@ -1,6 +1,6 @@
 // 视野 & 战争迷雾
 
-import { TERRAIN } from './config.js';
+import { TERRAIN, UNIT_TYPES } from './config.js';
 import { getTerrain, dist } from './utils.js';
 
 export function isVisibleToPlayer(state, x, y, playerIdx) {
@@ -15,7 +15,7 @@ export function isVisibleToPlayer(state, x, y, playerIdx) {
     }
   }
 
-  // 建筑和单位 9 宫格
+  // 己方建筑 9 宫格
   for (const [bkey, b] of state.buildings) {
     if (b.owner === playerIdx && b.type !== 'watchtower') {
       const [bx, by] = bkey.split(',').map(Number);
@@ -23,9 +23,12 @@ export function isVisibleToPlayer(state, x, y, playerIdx) {
     }
   }
 
+  // 己方兵种：视野 = 移动速度 × 3（切比雪夫距离，方形视野）
   for (const u of state.units) {
     if (u.owner === playerIdx) {
-      if (Math.abs(x - u.x) <= 1 && Math.abs(y - u.y) <= 1) return true;
+      const cfg = UNIT_TYPES[u.type];
+      const r = cfg ? cfg.move * 3 : 3;
+      if (Math.abs(x - u.x) <= r && Math.abs(y - u.y) <= r) return true;
     }
   }
 
@@ -51,12 +54,14 @@ export function updateExplored(state, playerIdx) {
   if (!exp) return;
   const player = state.players[playerIdx];
   if (!player || !player.alive) return;
-  const scanRadius = 5;
+  const defaultScanRadius = 5;
 
   const toCheck = new Set();
 
   for (const u of state.units) {
     if (u.owner !== playerIdx) continue;
+    const cfg = UNIT_TYPES[u.type];
+    const scanRadius = cfg ? cfg.move * 3 : defaultScanRadius;
     for (let dy = -scanRadius; dy <= scanRadius; dy++) {
       for (let dx = -scanRadius; dx <= scanRadius; dx++) {
         const nx = u.x + dx, ny = u.y + dy;
@@ -70,7 +75,7 @@ export function updateExplored(state, playerIdx) {
   for (const [bkey, b] of state.buildings) {
     if (b.owner !== playerIdx) continue;
     const [bx, by] = bkey.split(',').map(Number);
-    const r = b.type === 'watchtower' ? 5 : scanRadius;
+    const r = b.type === 'watchtower' ? 5 : defaultScanRadius;
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         const nx = bx + dx, ny = by + dy;

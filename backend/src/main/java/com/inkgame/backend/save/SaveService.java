@@ -32,8 +32,11 @@ public class SaveService {
 
     @Transactional
     public SaveDetail create(SaveRequest request) {
-        SaveSlot slot = new SaveSlot();
-        apply(slot, request, true);
+        // 一局游戏只保留一个存档：按 gameId 查找，存在则更新，不存在则新建
+        SaveSlot slot = repository.findByGameId(request.getGameId())
+                .orElseGet(SaveSlot::new);
+        boolean isNew = slot.getId() == null;
+        apply(slot, request, isNew);
         return SaveDetail.from(repository.save(slot));
     }
 
@@ -56,6 +59,7 @@ public class SaveService {
     }
 
     private void apply(SaveSlot slot, SaveRequest request, boolean isNew) {
+        slot.setGameId(request.getGameId());
         if (request.getSlotName() == null || request.getSlotName().isBlank()) {
             if (isNew) {
                 slot.setSlotName("存档-" + LocalDateTime.now().format(NAME_FMT));

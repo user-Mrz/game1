@@ -6,12 +6,23 @@ import { getUnitsAt, spawnUnit, removeDeadUnits } from './units.js';
 
 // ========== 建造 ==========
 
+export function getBuildRadius(state) {
+  return 3 + (state.turn - 1) * 2;
+}
+
+export function isInBuildRange(state, x, y, playerIdx) {
+  const player = state.players[playerIdx];
+  if (!player) return false;
+  const r = getBuildRadius(state);
+  return Math.abs(x - player.hqX) <= r && Math.abs(y - player.hqY) <= r;
+}
+
 export function canBuildOn(state, x, y, playerIdx) {
-  // 只允许在平原和沃土上建造；森林、山地、河流均不可建造
   const t = getTerrain(state, x, y);
   if (t !== TERRAIN.PLAIN && t !== TERRAIN.FERTILE) return false;
   if (getBuilding(state, x, y)) return false;
   if (getUnitsAt(state, x, y).length > 0) return false;
+  if (!isInBuildRange(state, x, y, playerIdx)) return false;
   return true;
 }
 
@@ -37,6 +48,10 @@ export function buildStructure(state, playerIdx, x, y, buildingType) {
   if (player.food < cfg.buildCost) return false;
   player.food -= cfg.buildCost;
   state.buildings.set(`${x},${y}`, { type: buildingType, owner: playerIdx, hp: cfg.hp });
+  // 建造效果反馈
+  if (state.effects) {
+    state.effects.push({ type: 'build', x, y, startTime: performance.now(), duration: 800 });
+  }
   state.actionMsg = `建造了${cfg.name}！`;
   return true;
 }

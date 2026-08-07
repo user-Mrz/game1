@@ -20,6 +20,7 @@ export function getMoveCost(state, unit, x, y, playerIdx) {
 export function getReachableTiles(state, unit, playerIdx) {
   if (unit.moved) return new Set();
   if (unit.moveCD > 0) return new Set();
+  if (unit.riverDelay > 0) return new Set();
   const movePoints = UNIT_TYPES[unit.type].move;
   if (movePoints < 1) return new Set();
 
@@ -57,6 +58,7 @@ export function getReachableTiles(state, unit, playerIdx) {
 }
 
 export function moveUnit(state, unit, tx, ty) {
+  const fromX = unit.x, fromY = unit.y;
   unit.x = tx;
   unit.y = ty;
   unit.moved = true;
@@ -66,8 +68,10 @@ export function moveUnit(state, unit, tx, ty) {
   }
   if (getTerrain(state, tx, ty) === TERRAIN.RIVER) {
     unit.riverDelay = 1;
-  } else if (unit.riverDelay > 0) {
-    unit.riverDelay--;
+  }
+  // 移动效果反馈
+  if (state.effects) {
+    state.effects.push({ type: 'move', fromX, fromY, x: tx, y: ty, startTime: performance.now(), duration: 500 });
   }
   // 站上己方粮仓：将个人粮草转化为该单位储备
   granarySupply(state, unit);

@@ -1,5 +1,6 @@
 package com.inkgame.backend.sim;
 
+import com.inkgame.backend.map.MapService;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -12,9 +13,16 @@ import java.util.function.DoubleSupplier;
 /**
  * 后端回合结算服务：接收前端状态，静默结算所有 AI 行动，返回结算后状态。
  * 无状态设计：不持有会话，AI 探索视野不维护（前端已不保留 AI explored）。
+ * 地形数据从 MapService 获取，不再从请求中传输。
  */
 @Service
 public class SimService {
+
+    private final MapService mapService;
+
+    public SimService(MapService mapService) {
+        this.mapService = mapService;
+    }
 
     public SimResult endTurn(SimRequest request) {
         GameState state = toState(request);
@@ -26,7 +34,21 @@ public class SimService {
         GameState s = new GameState();
         s.mapW = req.mapW;
         s.mapH = req.mapH;
-        s.terrain = Base64.getDecoder().decode(req.terrain);
+
+        // 优先从 MapService 获取地形；若不存在则从请求中解码（向后兼容）
+        byte[] terrain = null;
+        if (req.gameId != null) {
+            terrain = mapService.getTerrain(req.gameId);
+        }
+        if (terrain == null && req.terrain != null) {
+            terrain = Base64.getDecoder().decode(req.terrain);
+            // 存入 MapService 供后续使用
+            if (req.gameId != null) {
+                mapService.putTerrain(req.gameId, req.mapW, req.mapH, terrain);
+            }
+        }
+        s.terrain = terrain;
+
         s.players = new ArrayList<>(req.players == null ? List.of() : req.players);
         s.units = new ArrayList<>(req.units == null ? List.of() : req.units);
         s.buildings = new LinkedHashMap<>();

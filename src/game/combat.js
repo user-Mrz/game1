@@ -14,6 +14,23 @@ export function canAttack(state, attacker, defender) {
   return d <= cfg.atkRange;
 }
 
+// ========== 冲锋与撤退 ==========
+// 攻击后：若目标单位/建筑未被摧毁，攻击者返回原位准备下次攻击
+
+export function chargeAndRetreat(state, attacker, origX, origY, targetAlive) {
+  if (!targetAlive) return;
+  const cfg = UNIT_TYPES[attacker.type];
+  // 在移动范围内才返回
+  const distToOrig = Math.abs(attacker.x - origX) + Math.abs(attacker.y - origY);
+  if (distToOrig <= cfg.move + 1) {
+    attacker.x = origX;
+    attacker.y = origY;
+  }
+  if (state.effects) {
+    state.effects.push({ type: 'move', fromX: origX, fromY: origY, x: attacker.x, y: attacker.y, startTime: performance.now(), duration: 500 });
+  }
+}
+
 // ========== 远程攻击（弓兵专属） ==========
 
 export function canRangedAttack(state, attacker, defender) {
@@ -49,6 +66,11 @@ export function resolveRangedCombat(state, attacker, defender) {
   defender.troops = remainingTroops;
   attacker.attacked = true;
 
+  // 远程攻击效果反馈
+  if (state.effects) {
+    state.effects.push({ type: 'ranged', fromX: attacker.x, fromY: attacker.y, x: defender.x, y: defender.y, startTime: performance.now(), duration: 600 });
+  }
+
   state.actionMsg = `${atkCfg.name}远程射击${defCfg.name}，造成${damage}伤害！`;
 
   if (defender.troops <= 0 && defender.type === 'supply') {
@@ -73,6 +95,10 @@ export function resolveRangedBuildingCombat(state, attacker, x, y) {
   b.hp = Math.max(0, b.hp - damage);
   b.lastHitBy = attacker.owner;
   attacker.attacked = true;
+  // 远程攻击建筑效果反馈
+  if (state.effects) {
+    state.effects.push({ type: 'ranged', fromX: attacker.x, fromY: attacker.y, x, y, startTime: performance.now(), duration: 600 });
+  }
   state.actionMsg = `${atkCfg.name}远程射击${bCfg.name}，造成${damage}伤害！`;
   if (b.hp <= 0) {
     state.actionMsg += ` ${bCfg.name}血量归零！`;
@@ -92,6 +118,11 @@ export function resolveCombat(state, attacker, defender) {
 
   defender.troops = remainingTroops;
   attacker.attacked = true;
+
+  // 近战攻击效果反馈
+  if (state.effects) {
+    state.effects.push({ type: 'attack', fromX: attacker.x, fromY: attacker.y, x: defender.x, y: defender.y, startTime: performance.now(), duration: 600 });
+  }
 
   state.actionMsg = `${UNIT_TYPES[attacker.type].name}攻击${UNIT_TYPES[defender.type].name}，造成${damage}伤害！`;
 
@@ -131,6 +162,10 @@ export function resolveBuildingCombat(state, attacker, x, y) {
   b.hp = Math.max(0, b.hp - damage);
   b.lastHitBy = attacker.owner;
   attacker.attacked = true;
+  // 近战攻击建筑效果反馈
+  if (state.effects) {
+    state.effects.push({ type: 'attack', fromX: attacker.x, fromY: attacker.y, x, y, startTime: performance.now(), duration: 600 });
+  }
   state.actionMsg = `${atkCfg.name}攻击${bCfg.name}，造成${damage}伤害！`;
   if (b.hp <= 0) {
     state.actionMsg += ` ${bCfg.name}血量归零！`;

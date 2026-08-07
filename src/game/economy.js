@@ -11,7 +11,7 @@ export function collectFood(state) {
     if (b.owner === state.currentPlayer && b.type === 'farm') {
       const [bx, by] = bkey.split(',').map(Number);
       let amount = BUILDING_TYPES.farm.foodPerTurn || 3000;
-      if (getTerrain(state, bx, by) === TERRAIN.FERTILE) amount *= 2;
+      if (getTerrain(state, bx, by) === TERRAIN.FERTILE) amount *= 3;
       collected += amount;
     }
   }

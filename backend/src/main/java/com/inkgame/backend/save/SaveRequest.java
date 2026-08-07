@@ -5,6 +5,9 @@ import jakarta.validation.constraints.Size;
 
 public class SaveRequest {
 
+    @jakarta.validation.constraints.NotBlank(message = "gameId 不能为空")
+    private String gameId;
+
     @NotBlank(message = "stateJson 不能为空")
     private String stateJson;
 
@@ -16,6 +19,14 @@ public class SaveRequest {
     private Integer turn;
 
     private String phase;
+
+    public String getGameId() {
+        return gameId;
+    }
+
+    public void setGameId(String gameId) {
+        this.gameId = gameId;
+    }
 
     public String getStateJson() {
         return stateJson;

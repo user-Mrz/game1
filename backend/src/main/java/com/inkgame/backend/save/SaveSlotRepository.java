@@ -7,4 +7,6 @@ import java.util.List;
 public interface SaveSlotRepository extends JpaRepository<SaveSlot, Long> {
 
     List<SaveSlot> findAllByOrderByUpdatedAtDesc();
+
+    java.util.Optional<SaveSlot> findByGameId(String gameId);
 }

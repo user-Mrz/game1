@@ -6,16 +6,25 @@
         <span class="tutorial-progress">{{ step + 1 }} / {{ total }}</span>
       </div>
       <div class="tutorial-body">
-        <p class="tutorial-text">{{ currentText }}</p>
+        <h3 v-if="currentTitle" class="tutorial-section-title">{{ currentTitle }}</h3>
+        <div class="tutorial-text">
+          <template v-for="(line, idx) in lines" :key="idx">
+            <p v-if="line === ''" class="tutorial-empty-line">&nbsp;</p>
+            <p v-else class="tutorial-line">{{ line }}</p>
+          </template>
+        </div>
       </div>
       <div class="tutorial-actions">
+        <button v-if="!isFirstStep" class="prev-btn" @click="game.prevTutorialStep()">
+          上一步
+        </button>
         <button v-if="!isLastStep" class="next-btn" @click="game.nextTutorialStep()">
           下一步
         </button>
         <button v-else class="finish-btn" @click="game.finishTutorial(true)">
           开始游戏
         </button>
-        <button class="skip-btn" @click="game.skipTutorial()">跳过教学</button>
+        <button class="skip-btn" @click="game.skipTutorial()">跳过</button>
       </div>
     </div>
   </div>
@@ -30,30 +39,33 @@ const props = defineProps({ game: Object });
 const visible = computed(() => props.game.tutorialActive.value && !props.game.tutorialDone.value);
 const step = computed(() => props.game.tutorialStep.value);
 const total = TUTORIAL_STEPS.length;
-const currentText = computed(() => TUTORIAL_STEPS[step.value]?.text || '');
+const currentStep = computed(() => TUTORIAL_STEPS[step.value] || {});
+const currentTitle = computed(() => currentStep.value.title || '');
+const lines = computed(() => (currentStep.value.text || '').split('\n'));
 const isLastStep = computed(() => step.value >= total - 1);
+const isFirstStep = computed(() => step.value <= 0);
 
-function onOverlayClick() {
-  // 点击遮罩不关闭，必须通过按钮操作
-}
+function onOverlayClick() {}
 </script>
 
 <style scoped>
 .tutorial-overlay {
   position: fixed; inset: 0; z-index: 200;
-  background: rgba(0,0,0,0.45);
+  background: rgba(0,0,0,0.55);
   display: flex; align-items: center; justify-content: center;
   pointer-events: auto;
 }
 
 .tutorial-panel {
   position: relative;
-  width: 88%; max-width: 420px;
+  width: 92%; max-width: 480px;
+  max-height: 82vh;
   background: #fafaf7;
   border: 2px solid #b03028;
   border-radius: 4px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.4);
   overflow: hidden;
+  display: flex; flex-direction: column;
 }
 
 .tutorial-header {
@@ -62,6 +74,7 @@ function onOverlayClick() {
   background: linear-gradient(90deg, #0d0d0d 0%, #1a1a1a 100%);
   color: #fafaf7;
   border-bottom: 2px solid #b03028;
+  flex-shrink: 0;
 }
 
 .tutorial-title {
@@ -75,26 +88,49 @@ function onOverlayClick() {
 }
 
 .tutorial-body {
-  padding: 18px 20px 14px;
+  padding: 16px 20px 12px;
   background: #fafaf7;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.tutorial-section-title {
+  font-family: 'Ma Shan Zheng','ZCOOL XiaoWei',cursive;
+  font-size: 18px;
+  color: #b03028;
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(176,48,40,0.3);
+  letter-spacing: 3px;
 }
 
 .tutorial-text {
   font-family: 'Noto Serif SC','ZCOOL XiaoWei',serif;
-  font-size: 15px; line-height: 1.8;
+  font-size: 14px; line-height: 1.75;
   color: #2a2a2a;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
+}
+
+.tutorial-line {
+  margin: 0 0 2px;
+  white-space: pre-wrap;
+}
+
+.tutorial-empty-line {
+  margin: 0;
+  height: 6px;
 }
 
 .tutorial-actions {
-  display: flex; gap: 10px;
-  padding: 12px 16px;
+  display: flex; gap: 8px;
+  padding: 10px 14px;
   background: #f0ede5;
   border-top: 1px solid rgba(0,0,0,0.1);
+  flex-shrink: 0;
 }
 
 button {
-  flex: 1; padding: 10px 14px;
+  flex: 1; padding: 9px 12px;
   border-radius: 2px; border: none;
   font-family: 'Noto Serif SC','ZCOOL XiaoWei',serif;
   font-size: 14px; cursor: pointer;
@@ -105,14 +141,20 @@ button {
 .next-btn, .finish-btn {
   background: #0d0d0d; color: #fafaf7;
   font-family: 'Ma Shan Zheng','ZCOOL XiaoWei',cursive;
-  font-size: 16px; letter-spacing: 4px;
+  font-size: 15px; letter-spacing: 3px;
 }
 .next-btn:active, .finish-btn:active { transform: scale(0.97); opacity: 0.85; }
+
+.prev-btn {
+  background: #e0ddd5; color: #555;
+  border: 1px solid #bbb;
+}
+.prev-btn:active { background: #d0cdc5; }
 
 .skip-btn {
   background: transparent; color: #888;
   border: 1px solid #ccc;
-  flex: 0.7;
+  flex: 0.6;
 }
 .skip-btn:active { background: #e8e8e0; }
 </style>

@@ -15,7 +15,7 @@ export const UNIT_TYPES = {
 
 export const BUILDING_TYPES = {
   hq:            { name:'主营', hp:10000, atk:0, atkRange:0, visionRadius:1, buildable:false },
-  farm:          { name:'农田', hp:1000, atk:0, atkRange:0, visionRadius:1, foodPerTurn:1000, buildable:true, buildCost:1000 },
+  farm:          { name:'农田', hp:1000, atk:0, atkRange:0, visionRadius:1, foodPerTurn:500, buildable:true, buildCost:1000 },
   infantry_barracks: { name:'步兵营', hp:1000, atk:0, atkRange:0, visionRadius:1, buildable:true, buildCost:1500 },
   archer_barracks:   { name:'弓兵营', hp:1000, atk:0, atkRange:0, visionRadius:1, buildable:true, buildCost:2000 },
   lc_barracks:       { name:'轻骑兵营', hp:1000, atk:0, atkRange:0, visionRadius:1, buildable:true, buildCost:2500 },
@@ -51,4 +51,58 @@ export const BARRACKS_TYPE_MAP = {
   'infantry_barracks':'infantry', 'archer_barracks':'archer',
   'lc_barracks':'light_cavalry', 'hc_barracks':'heavy_cavalry',
   'supply_barracks':'supply'
+};
+
+// 难度配置：影响AI智能程度与AI属性
+export const DIFFICULTY = {
+  easy: {
+    name: '简单',
+    // AI智能
+    aiBuildRadius: 3,        // AI建造搜索半径
+    aiRangedAttack: false,   // AI是否使用远程攻击
+    aiSmartTarget: false,    // AI是否智能选择攻击目标
+    aiProduceThreshold: 3000, // AI生产阈值（粮草余量）
+    aiBuildThreshold: 3000,   // AI建造阈值
+    // AI属性倍率
+    aiUnitHpMul: 1.0,       // AI兵种血量倍率
+    aiUnitAtkMul: 1.0,      // AI兵种攻击倍率
+    aiBuildingHpMul: 1.0,   // AI建筑血量倍率
+    aiStartBonus: 0,        // AI起始粮草加成
+  },
+  normal: {
+    name: '普通',
+    aiBuildRadius: 5,
+    aiRangedAttack: true,
+    aiSmartTarget: true,
+    aiProduceThreshold: 2500,
+    aiBuildThreshold: 2500,
+    aiUnitHpMul: 1.2,
+    aiUnitAtkMul: 1.1,
+    aiBuildingHpMul: 1.2,
+    aiStartBonus: 1000,
+  },
+  hard: {
+    name: '困难',
+    aiBuildRadius: 7,
+    aiRangedAttack: true,
+    aiSmartTarget: true,
+    aiProduceThreshold: 2000,
+    aiBuildThreshold: 2000,
+    aiUnitHpMul: 1.5,
+    aiUnitAtkMul: 1.3,
+    aiBuildingHpMul: 1.5,
+    aiStartBonus: 2000,
+  },
+  extreme: {
+    name: '极难',
+    aiBuildRadius: 9,
+    aiRangedAttack: true,
+    aiSmartTarget: true,
+    aiProduceThreshold: 1500,
+    aiBuildThreshold: 1500,
+    aiUnitHpMul: 2.0,
+    aiUnitAtkMul: 1.6,
+    aiBuildingHpMul: 2.0,
+    aiStartBonus: 4000,
+  },
 };

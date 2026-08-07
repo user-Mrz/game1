@@ -1,19 +1,10 @@
 // 后端回合结算 API 客户端
-// 把运行状态（不含 explored/视口等仅前端字段）发给后端，后端结算所有 AI 行动后返回新状态
-
-// Uint8Array → base64（每 0x8000 字节分块，避免 call stack 溢出）
-function bytesToBase64(bytes) {
-  let bin = '';
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(bin);
-}
+// 把运行状态（不含 terrain/explored/视口等仅前端字段）发给后端，后端结算所有 AI 行动后返回新状态
+// 地形数据由后端 MapService 管理，不再随请求传输
 
 export function buildSimRequest(state, seed) {
-  // 直接构造请求体：不经过 serializeGameState，避免先拷贝整个 explored 再丢弃造成瞬时内存尖峰
   return {
+    gameId: state.gameId,
     mapW: state.mapW,
     mapH: state.mapH,
     currentPlayer: state.currentPlayer,
@@ -21,7 +12,6 @@ export function buildSimRequest(state, seed) {
     nextUnitId: state.nextUnitId,
     seed,
     tutorialMode: !!state.tutorialMode,
-    terrain: bytesToBase64(state.terrain),
     players: state.players.map(p => ({ ...p })),
     units: state.units.map(u => ({ ...u })),
     buildings: Array.from(state.buildings.entries()).map(([k, v]) => ({

@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 public class SaveSummary {
 
     private Long id;
+    private String gameId;
     private String slotName;
     private Integer mapSize;
     private Integer turn;
@@ -14,6 +15,7 @@ public class SaveSummary {
     public static SaveSummary from(SaveSlot slot) {
         SaveSummary s = new SaveSummary();
         s.setId(slot.getId());
+        s.setGameId(slot.getGameId());
         s.setSlotName(slot.getSlotName());
         s.setMapSize(slot.getMapSize());
         s.setTurn(slot.getTurn());
@@ -28,6 +30,14 @@ public class SaveSummary {
 
     public void setId(Long id) {
         this.id = id;
+    }
+
+    public String getGameId() {
+        return gameId;
+    }
+
+    public void setGameId(String gameId) {
+        this.gameId = gameId;
     }
 
     public String getSlotName() {

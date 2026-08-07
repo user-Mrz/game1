@@ -3,16 +3,17 @@
 import { shallowRef, ref, reactive, computed, markRaw } from 'vue';
 import { createGameState, initPlayers, placeInitialBuildings, startTurn, endTurn } from '../game/state.js';
 import { generateTerrain } from '../game/terrain.js';
+import { mapApi } from '../api/mapApi.js';
 import { spawnUnit } from '../game/units.js';
 import { render, drawMapOverlay, mapClickToWorld } from '../game/renderer.js';
 import { updateAllExplored, isUnitVisibleToPlayer } from '../game/vision.js';
 import { centerViewOn } from '../game/camera.js';
 import { getReachableTiles, moveUnit } from '../game/movement.js';
-import { canAttack, resolveCombat, canAttackBuilding, resolveBuildingCombat, canRangedAttack, canRangedAttackBuilding, resolveRangedCombat, resolveRangedBuildingCombat } from '../game/combat.js';
+import { canAttack, resolveCombat, canAttackBuilding, resolveBuildingCombat, canRangedAttack, canRangedAttackBuilding, resolveRangedCombat, resolveRangedBuildingCombat, chargeAndRetreat } from '../game/combat.js';
 import { getBuilding, screenToWorld, worldToScreen, updateTileSize, clamp, dist } from '../game/utils.js';
 import { getUnitsAt } from '../game/units.js';
-import { canBuildOn, buildStructure, canProduce, produceUnit, demolishStructure } from '../game/buildings.js';
-import { UNIT_TYPES, BUILDING_TYPES, BARRACKS_TYPE_MAP } from '../game/config.js';
+import { canBuildOn, isInBuildRange, buildStructure, canProduce, produceUnit, demolishStructure } from '../game/buildings.js';
+import { UNIT_TYPES, BUILDING_TYPES, BARRACKS_TYPE_MAP, DIFFICULTY } from '../game/config.js';
 import { TERRAIN } from '../game/config.js';
 import { saveApi } from '../api/saveApi.js';
 import { simApi } from '../api/simApi.js';
@@ -162,6 +163,37 @@ export function useGame() {
     refreshUI();
     doRender();
     checkTutorialProgress();
+    // 如果有待播放的效果，启动动画循环
+    if (state.effects && state.effects.length > 0) {
+      startEffectLoop();
+    }
+  }
+
+  // ========== 视觉效果反馈 ==========
+  let effectAnimId = null;
+
+  function addEffect(fx) {
+    if (!state.effects) state.effects = [];
+    state.effects.push({ ...fx, startTime: performance.now() });
+    startEffectLoop();
+  }
+
+  function startEffectLoop() {
+    if (effectAnimId) return;
+    const tick = () => {
+      const now = performance.now();
+      // 清理过期效果
+      if (state.effects) {
+        state.effects = state.effects.filter(fx => now - fx.startTime < fx.duration);
+      }
+      doRender();
+      if (state.effects && state.effects.length > 0) {
+        effectAnimId = requestAnimationFrame(tick);
+      } else {
+        effectAnimId = null;
+      }
+    };
+    effectAnimId = requestAnimationFrame(tick);
   }
 
   function handleGameOver(won) {
@@ -184,21 +216,34 @@ export function useGame() {
 
   // ========== 游戏流程 ==========
 
-  function startGame(mapSize, aiCount) {
+  async function startGame(mapSize, aiCount, difficulty = 'easy') {
     isCreating.value = true;
+
+    // 先从后端获取地形数据（在 setTimeout 之前完成异步操作）
+    const gameId = state.gameId;
+    const w = mapSize, h = mapSize;
+    let terrain;
+    try {
+      const mapData = await mapApi.generate(gameId, w, h);
+      terrain = mapData.terrain;
+    } catch {
+      terrain = generateTerrain(w, h);
+    }
+
     setTimeout(() => {
       tutorialActive.value = false;
       tutorialDone.value = false;
       state.tutorialMode = false;
+      state.difficulty = difficulty;
       state.zoomFactor = 1.0;
       zoomFactor.value = 1.0;
-      state.mapW = mapSize;
-      state.mapH = mapSize;
+      state.mapW = w;
+      state.mapH = h;
       state.phase = 'playing';
       state.turn = 1;
 
       initPlayers(state, 1, aiCount);
-      state.terrain = generateTerrain(state.mapW, state.mapH);
+      state.terrain = terrain;
       placeInitialBuildings(state);
 
       // 清理人类玩家主营周围
@@ -237,6 +282,28 @@ export function useGame() {
         }
       }
 
+      // 应用难度：AI起始粮草加成 + AI单位属性倍率 + AI建筑血量倍率
+      const diff = DIFFICULTY[difficulty] || DIFFICULTY.easy;
+      for (let p = 1; p < state.players.length; p++) {
+        const ai = state.players[p];
+        // AI起始粮草加成
+        ai.food += diff.aiStartBonus;
+      }
+      // AI单位血量/攻击倍率
+      for (const u of state.units) {
+        if (u.owner === 0) continue;
+        const cfg = UNIT_TYPES[u.type];
+        u.troops = Math.ceil(u.troops * diff.aiUnitHpMul);
+      }
+      // AI建筑血量倍率
+      for (const [bkey, b] of state.buildings) {
+        if (b.owner === 0) continue;
+        const bCfg = BUILDING_TYPES[b.type];
+        if (bCfg && bCfg.hp) {
+          b.hp = Math.ceil(b.hp * diff.aiBuildingHpMul);
+        }
+      }
+
       updateAllExplored(state);
       centerViewOn(state, state.players[0].hqX, state.players[0].hqY);
       isCreating.value = false;
@@ -262,8 +329,19 @@ export function useGame() {
     return null;
   }
 
-  function startTutorial() {
+  async function startTutorial() {
     isCreating.value = true;
+
+    // 先从后端获取地形数据
+    const gameId = state.gameId;
+    let terrain;
+    try {
+      const mapData = await mapApi.generate(gameId, 100, 100);
+      terrain = mapData.terrain;
+    } catch {
+      terrain = generateTerrain(100, 100);
+    }
+
     setTimeout(() => {
       state.zoomFactor = 1.0;
       zoomFactor.value = 1.0;
@@ -273,7 +351,7 @@ export function useGame() {
       state.turn = 1;
 
       initPlayers(state, 1, 1); // 1个人类 + 1个敌方靶子
-      state.terrain = generateTerrain(100, 100);
+      state.terrain = terrain;
       placeInitialBuildings(state);
 
       // 清理人类玩家主营周围的山地
@@ -347,9 +425,12 @@ export function useGame() {
   function nextTutorialStep() {
     if (!tutorialActive.value || tutorialDone.value) return;
     tutorialStep.value = Math.min(tutorialStep.value + 1, TUTORIAL_STEPS.length - 1);
-    if (tutorialStep.value >= TUTORIAL_STEPS.length - 1) {
-      tutorialDone.value = true;
-    }
+    syncAndRender();
+  }
+
+  function prevTutorialStep() {
+    if (!tutorialActive.value) return;
+    tutorialStep.value = Math.max(tutorialStep.value - 1, 0);
     syncAndRender();
   }
 
@@ -633,20 +714,44 @@ export function useGame() {
     return bestTile;
   }
 
-  // 冲锋到攻击位置 → 攻击 → 撤退回原位
-  function chargeAndRetreat(state, unit, atkTile, attackFn) {
+  // 冲锋到攻击位置 → 攻击 → 若目标未死则撤回原位
+  function chargeAttackUnit(state, unit, atkTile, enemy) {
     const origX = unit.x, origY = unit.y;
     // 临时移动到攻击位置
     unit.x = atkTile.x;
     unit.y = atkTile.y;
     // 执行攻击
-    attackFn();
-    // 攻击后回到原位
-    unit.x = origX;
-    unit.y = origY;
-    // 消耗移动力和攻击次数
+    resolveCombat(state, unit, enemy);
+    // 判断目标是否存活：未死则撤回
+    const stillAlive = state.units.includes(enemy) && enemy.troops > 0;
+    if (stillAlive) {
+      chargeAndRetreat(state, unit, origX, origY, true);
+      state.actionMsg = (state.actionMsg || '') + ' 目标未消灭，冲锋后撤回原位！';
+    } else {
+      state.actionMsg = (state.actionMsg || '') + ' 冲锋攻击成功！';
+    }
     unit.moved = true;
-    state.actionMsg = (state.actionMsg || '') + ' 冲锋攻击后撤回原位！';
+  }
+
+  function chargeAttackBuilding(state, unit, atkTile, tx, ty) {
+    const origX = unit.x, origY = unit.y;
+    const b = state.buildings.get(`${tx},${ty}`);
+    const origHP = b ? b.hp : 0;
+    // 临时移动到攻击位置
+    unit.x = atkTile.x;
+    unit.y = atkTile.y;
+    // 执行攻击
+    resolveBuildingCombat(state, unit, tx, ty);
+    // 判断建筑是否存活
+    const bAfter = state.buildings.get(`${tx},${ty}`);
+    const stillAlive = bAfter && bAfter.hp > 0;
+    if (stillAlive) {
+      chargeAndRetreat(state, unit, origX, origY, true);
+      state.actionMsg = (state.actionMsg || '') + ' 建筑未摧毁，冲锋后撤回原位！';
+    } else {
+      state.actionMsg = (state.actionMsg || '') + ' 冲锋攻击成功！';
+    }
+    unit.moved = true;
   }
 
   // ========== 点击处理 ==========
@@ -707,9 +812,15 @@ export function useGame() {
         if (enemies.length > 0) {
           const enemy = enemies[0];
 
-          // 1. 已在攻击范围内 → 直接攻击
+          // 1. 已在攻击范围内 → 直接攻击（单位）
           if (canAttack(state, selUnit, enemy)) {
+            const origX = selUnit.x, origY = selUnit.y;
             resolveCombat(state, selUnit, enemy);
+            const stillAlive = state.units.includes(enemy) && enemy.troops > 0;
+            // 目标未死则撤回原位（若之前移动过）
+            if (stillAlive && (origX !== selUnit.x || origY !== selUnit.y)) {
+              chargeAndRetreat(state, selUnit, origX, origY, true);
+            }
             updateAllExplored(state);
             syncAndRender();
             return;
@@ -719,9 +830,7 @@ export function useGame() {
           if (!selUnit.moved && cfg.move > 0) {
             const atkTile = findAttackPosition(state, selUnit, enemy.x, enemy.y, cfg.atkRange, hp.index);
             if (atkTile) {
-              chargeAndRetreat(state, selUnit, atkTile, () => {
-                resolveCombat(state, selUnit, enemy);
-              });
+              chargeAttackUnit(state, selUnit, atkTile, enemy);
               updateAllExplored(state);
               syncAndRender();
               return;
@@ -735,7 +844,13 @@ export function useGame() {
           clickedBuilding && clickedBuilding.owner !== hp.index) {
         // 1. 已在攻击范围内 → 直接攻击
         if (canAttackBuilding(state, selUnit, tx, ty)) {
+          const origX = selUnit.x, origY = selUnit.y;
           resolveBuildingCombat(state, selUnit, tx, ty);
+          const bAfter = state.buildings.get(`${tx},${ty}`);
+          const stillAlive = bAfter && bAfter.hp > 0;
+          if (stillAlive && (origX !== selUnit.x || origY !== selUnit.y)) {
+            chargeAndRetreat(state, selUnit, origX, origY, true);
+          }
           updateAllExplored(state);
           syncAndRender();
           return;
@@ -744,9 +859,7 @@ export function useGame() {
         if (!selUnit.moved && cfg.move > 0) {
           const atkTile = findAttackPosition(state, selUnit, tx, ty, cfg.atkRange, hp.index);
           if (atkTile) {
-            chargeAndRetreat(state, selUnit, atkTile, () => {
-              resolveBuildingCombat(state, selUnit, tx, ty);
-            });
+            chargeAttackBuilding(state, selUnit, atkTile, tx, ty);
             updateAllExplored(state);
             syncAndRender();
             return;
@@ -868,8 +981,14 @@ export function useGame() {
     const hp = state.players.find(p => p.isHuman && p.alive);
     if (!hp || state.currentPlayer !== hp.index) return false;
 
+    if (!isInBuildRange(state, tx, ty, hp.index)) {
+      state.actionMsg = '超出建筑范围！';
+      syncAndRender();
+      return false;
+    }
+
     if (!canBuildOn(state, tx, ty, hp.index)) {
-      state.actionMsg = `无法在此建造！仅平原和沃土可建造。`;
+      state.actionMsg = '无法在此建造！仅平原和沃土可建造。';
       syncAndRender();
       return false;
     }
@@ -1005,6 +1124,7 @@ export function useGame() {
 
   function buildSavePayload(slotName) {
     return {
+      gameId: state.gameId,
       slotName,
       mapSize: state.mapW,
       turn: state.turn,
@@ -1069,7 +1189,40 @@ export function useGame() {
     saveMsg.value = '';
     try {
       const detail = await saveApi.get(id);
-      const loaded = deserializeGameState(JSON.parse(detail.stateJson));
+      const raw = JSON.parse(detail.stateJson);
+      const loaded = deserializeGameState(raw);
+      // 恢复 gameId，确保一局游戏一个存档
+      if (detail.gameId) {
+        loaded.gameId = detail.gameId;
+      }
+
+      // 从后端获取地形数据
+      if (!loaded.terrain && loaded.gameId) {
+        try {
+          // 先检查后端是否已有此地形
+          const exists = await mapApi.exists(loaded.gameId);
+          if (exists) {
+            const mapData = await mapApi.get(loaded.gameId);
+            if (mapData) loaded.terrain = mapData.terrain;
+          } else if (raw.terrain) {
+            // 旧版存档（v1）含地形数组，上传到后端
+            const terrainBytes = new Uint8Array(raw.terrain);
+            await mapApi.upload(loaded.gameId, loaded.mapW, loaded.mapH, terrainBytes);
+            loaded.terrain = terrainBytes;
+          }
+        } catch {
+          // 后端不可用，尝试从旧版存档恢复
+          if (raw.terrain) {
+            loaded.terrain = new Uint8Array(raw.terrain);
+          }
+        }
+      }
+
+      if (!loaded.terrain) {
+        // 最终回退：本地生成
+        loaded.terrain = generateTerrain(loaded.mapW, loaded.mapH);
+      }
+
       applyLoadedState(loaded);
       saveMenuVisible.value = false;
       syncAndRender();
@@ -1098,6 +1251,7 @@ export function useGame() {
     state.tutorialMode = false;
     tutorialActive.value = false;
     tutorialDone.value = false;
+    state.gameId = loaded.gameId || state.gameId;
     state.zoomFactor = loaded.zoomFactor || 1.0;
     zoomFactor.value = state.zoomFactor;
     state.mapW = loaded.mapW;
@@ -1312,13 +1466,14 @@ export function useGame() {
     openSaveMenu, closeSaveMenu, switchSaveMode, refreshSaveList,
     saveCurrentGame, loadSave, deleteSave,
     returnToMenu,
-    startTutorial, nextTutorialStep, skipTutorial, finishTutorial,
+    startTutorial, nextTutorialStep, prevTutorialStep, skipTutorial, finishTutorial,
     onPointerDown, onPointerMove, onPointerUp,
     onContextMenu,
     onMinimapClick, onKeydown, onWheel,
     showInfo,
     zoomIn, zoomOut, setZoom, resetZoom,
     syncAndRender, doRender,
+    addEffect,
     // 大地图方法
     toggleBigMap, closeBigMap, drawBigMap,
     onBigMapClick, onBigMapPointerDown, onBigMapPointerMove, onBigMapPointerUp,

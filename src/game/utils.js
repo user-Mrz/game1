@@ -11,11 +11,11 @@ export function getBuilding(state, x, y) {
   return state.buildings.get(key(x, y)) || null;
 }
 
-// 建筑通行规则：己方建筑可自由通行/停留；他人建筑（农田除外）不可通行
+// 建筑通行规则：己方建筑可自由通行/停留；敌方建筑（含农田）均不可通行
 export function isBuildingBlocked(state, x, y, playerIdx) {
   const b = getBuilding(state, x, y);
   if (!b) return false;
-  return b.owner !== playerIdx && b.type !== 'farm';
+  return b.owner !== playerIdx;
 }
 
 export function getTerrain(state, x, y) {
