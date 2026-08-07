@@ -8,6 +8,7 @@
       <button :disabled="game.btnBuildDisabled.value" @click="game.showBuildMenu()">建造</button>
       <button :disabled="game.btnProduceDisabled.value" @click="game.showProduceMenu()">生产兵种</button>
       <button :disabled="game.btnDemolishDisabled.value" @click="game.showDemolishMenu()">拆除建筑</button>
+      <button v-if="game.btnRangedVisible.value" :class="{ active: game.rangedMode.value }" :disabled="game.btnRangedDisabled.value" @click="game.toggleRangedMode()">远程攻击</button>
       <button :disabled="game.btnSkipDisabled.value" @click="game.skipUnit()">跳过单位</button>
     </div>
     <div class="action-btns" v-else>
@@ -54,4 +55,7 @@ button.danger {
   background: #e8e0e0; color: #0d0d0d; border-color: #888;
 }
 button:disabled { opacity: 0.25; }
+button.active {
+  background: #c0392b; color: #fafaf7; border-color: #c0392b; font-weight: bold;
+}
 </style>

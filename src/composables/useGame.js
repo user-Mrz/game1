@@ -8,8 +8,8 @@ import { render, drawMapOverlay, mapClickToWorld } from '../game/renderer.js';
 import { updateAllExplored, isUnitVisibleToPlayer } from '../game/vision.js';
 import { centerViewOn } from '../game/camera.js';
 import { getReachableTiles, moveUnit } from '../game/movement.js';
-import { canAttack, resolveCombat, canAttackBuilding, resolveBuildingCombat } from '../game/combat.js';
-import { getBuilding, screenToWorld, worldToScreen, updateTileSize, clamp } from '../game/utils.js';
+import { canAttack, resolveCombat, canAttackBuilding, resolveBuildingCombat, canRangedAttack, canRangedAttackBuilding, resolveRangedCombat, resolveRangedBuildingCombat } from '../game/combat.js';
+import { getBuilding, screenToWorld, worldToScreen, updateTileSize, clamp, dist } from '../game/utils.js';
 import { getUnitsAt } from '../game/units.js';
 import { canBuildOn, buildStructure, canProduce, produceUnit, demolishStructure } from '../game/buildings.js';
 import { UNIT_TYPES, BUILDING_TYPES, BARRACKS_TYPE_MAP } from '../game/config.js';
@@ -50,6 +50,9 @@ export function useGame() {
   const btnProduceDisabled = ref(true);
   const btnSkipDisabled = ref(true);
   const btnDemolishDisabled = ref(true);
+  const btnRangedVisible = ref(false);
+  const btnRangedDisabled = ref(true);
+  const rangedMode = ref(false);
   const gameOverVisible = ref(false);
   const gameOverTitle = ref('');
   const gameOverMsg = ref('');
@@ -107,9 +110,14 @@ export function useGame() {
       const maxHp = cfg.troops * cfg.hpPerTroop;
       const hp = selUnit.troops * cfg.hpPerTroop;
       const atkPower = selUnit.troops * cfg.atkPerTroop;
-      unitInfoText.value = `${cfg.name} 兵力:${selUnit.troops} | 血量:${hp}/${maxHp} | 攻击力:${atkPower} | 粮草:${selUnit.supplies}/${cfg.foodCap} | 移动:${selUnit.moved ? '已用' : '可用'} | 攻击:${selUnit.attacked ? '已用' : '可用'}`;
+      const rangedInfo = cfg.rangedAtkRange ? ` | 远程射程:${cfg.rangedAtkRange}格(半伤)` : '';
+      unitInfoText.value = `${cfg.name} 兵力:${selUnit.troops} | 血量:${hp}/${maxHp} | 攻击力:${atkPower} | 粮草:${selUnit.supplies}/${cfg.foodCap} | 移动:${selUnit.moved ? '已用' : '可用'} | 攻击:${selUnit.attacked ? '已用' : '可用'}${rangedInfo}`;
       // 不再自动设置 unitDetail，让左键选择不显示信息卡片
       btnSkipDisabled.value = !isHumanTurn.value || state.aiThinking;
+      // 远程攻击按钮：仅弓兵可见
+      btnRangedVisible.value = !!cfg.rangedAtkRange;
+      btnRangedDisabled.value = selUnit.attacked || !isHumanTurn.value || state.aiThinking;
+      if (selUnit.attacked) rangedMode.value = false;
     } else if (state.selectedBuilding) {
       const b = getBuilding(state, state.selectedBuilding.x, state.selectedBuilding.y);
       if (b) {
@@ -117,9 +125,11 @@ export function useGame() {
         unitInfoText.value = `${bCfg.name} HP:${b.hp}/${bCfg.hp} | 所属:${state.players[b.owner]?.name || '?'}`;
       }
       btnSkipDisabled.value = true;
+      btnRangedVisible.value = false;
     } else {
       unitInfoText.value = isHumanTurn.value ? '点击己方单位或建筑选择，右键查看信息' : (state.aiThinking ? 'AI思考中...' : '等待中...');
       btnSkipDisabled.value = true;
+      btnRangedVisible.value = false;
     }
 
     // 建造/生产按钮
@@ -494,7 +504,20 @@ export function useGame() {
   function clearSelection() {
     state.selectedUnitId = null;
     state.selectedBuilding = null;
+    rangedMode.value = false;
+    state.rangedMode = false;
     buildMenuVisible.value = false;
+    syncAndRender();
+  }
+
+  function toggleRangedMode() {
+    const selUnit = state.selectedUnitId ? state.units.find(u => u.id === state.selectedUnitId) : null;
+    if (!selUnit || selUnit.attacked) return;
+    const cfg = UNIT_TYPES[selUnit.type];
+    if (!cfg.rangedAtkRange) return;
+    rangedMode.value = !rangedMode.value;
+    state.rangedMode = rangedMode.value;
+    state.actionMsg = rangedMode.value ? '远程攻击模式：点击4格内敌军或建筑进行射击' : '';
     syncAndRender();
   }
 
@@ -540,6 +563,7 @@ export function useGame() {
         moved: unit.moved,
         attacked: unit.attacked,
         ownerName: state.players[unit.owner]?.name || '',
+        ownerColor: state.players[unit.owner]?.color || '#333',
         note: unit.type === 'supply' ? '可为相邻友军补充粮草 · 站上己方粮仓可补充储备' : '',
       };
       return;
@@ -565,6 +589,7 @@ export function useGame() {
         hp: b.hp,
         maxHp: bCfg.hp,
         ownerName: state.players[b.owner]?.name || '?',
+        ownerColor: state.players[b.owner]?.color || '#333',
         atk: bCfg.atk || 0,
         atkRange: bCfg.atkRange || 0,
         visionRadius: bCfg.visionRadius ?? 1,
@@ -588,6 +613,40 @@ export function useGame() {
     // 点击空白处，关闭信息卡片
     unitDetail.value = null;
     buildingDetail.value = null;
+  }
+
+  // ========== 冲锋攻击辅助 ==========
+
+  // 在可达范围内寻找能攻击目标的最近格子
+  function findAttackPosition(state, unit, targetX, targetY, atkRange, playerIdx) {
+    const reachable = getReachableTiles(state, unit, playerIdx);
+    let bestTile = null, bestDist = Infinity;
+    for (const rk of reachable.keys()) {
+      const [rx, ry] = rk.split(',').map(Number);
+      if (rx === unit.x && ry === unit.y) continue; // 跳过原位
+      const d = dist(rx, ry, targetX, targetY);
+      if (d <= atkRange && d < bestDist) {
+        bestDist = d;
+        bestTile = { x: rx, y: ry };
+      }
+    }
+    return bestTile;
+  }
+
+  // 冲锋到攻击位置 → 攻击 → 撤退回原位
+  function chargeAndRetreat(state, unit, atkTile, attackFn) {
+    const origX = unit.x, origY = unit.y;
+    // 临时移动到攻击位置
+    unit.x = atkTile.x;
+    unit.y = atkTile.y;
+    // 执行攻击
+    attackFn();
+    // 攻击后回到原位
+    unit.x = origX;
+    unit.y = origY;
+    // 消耗移动力和攻击次数
+    unit.moved = true;
+    state.actionMsg = (state.actionMsg || '') + ' 冲锋攻击后撤回原位！';
   }
 
   // ========== 点击处理 ==========
@@ -616,24 +675,86 @@ export function useGame() {
     // 移动已选中单位
     if (state.selectedUnitId && !clickedUnit) {
       const selUnit = state.units.find(u => u.id === state.selectedUnitId);
-      // 攻击敌人（优先于移动，避免点击敌方格子时移动上去）
-      if (selUnit && !selUnit.attacked) {
+      const cfg = selUnit ? UNIT_TYPES[selUnit.type] : null;
+
+      // === 远程攻击模式（弓兵专属） ===
+      if (rangedMode.value && selUnit && !selUnit.attacked && cfg && cfg.rangedAtkRange) {
         const enemies = getUnitsAt(state, tx, ty).filter(u => u.owner !== hp.index);
-        if (enemies.length > 0 && canAttack(state, selUnit, enemies[0])) {
-          resolveCombat(state, selUnit, enemies[0]);
+        if (enemies.length > 0 && canRangedAttack(state, selUnit, enemies[0])) {
+          resolveRangedCombat(state, selUnit, enemies[0]);
+          rangedMode.value = false;
           updateAllExplored(state);
           syncAndRender();
           return;
         }
-        // 攻击敌方建筑
-        if (clickedBuilding && clickedBuilding.owner !== hp.index && canAttackBuilding(state, selUnit, tx, ty)) {
+        if (clickedBuilding && clickedBuilding.owner !== hp.index && canRangedAttackBuilding(state, selUnit, tx, ty)) {
+          resolveRangedBuildingCombat(state, selUnit, tx, ty);
+          rangedMode.value = false;
+          updateAllExplored(state);
+          syncAndRender();
+          return;
+        }
+        // 点击无效目标 → 退出远程模式
+        rangedMode.value = false;
+        state.actionMsg = '已退出远程攻击模式';
+        syncAndRender();
+        return;
+      }
+
+      // === 攻击敌人 ===
+      if (selUnit && !selUnit.attacked && cfg && cfg.atkRange > 0) {
+        const enemies = getUnitsAt(state, tx, ty).filter(u => u.owner !== hp.index);
+        if (enemies.length > 0) {
+          const enemy = enemies[0];
+
+          // 1. 已在攻击范围内 → 直接攻击
+          if (canAttack(state, selUnit, enemy)) {
+            resolveCombat(state, selUnit, enemy);
+            updateAllExplored(state);
+            syncAndRender();
+            return;
+          }
+
+          // 2. 不在攻击范围内但可移动 → 冲锋攻击后撤退
+          if (!selUnit.moved && cfg.move > 0) {
+            const atkTile = findAttackPosition(state, selUnit, enemy.x, enemy.y, cfg.atkRange, hp.index);
+            if (atkTile) {
+              chargeAndRetreat(state, selUnit, atkTile, () => {
+                resolveCombat(state, selUnit, enemy);
+              });
+              updateAllExplored(state);
+              syncAndRender();
+              return;
+            }
+          }
+        }
+      }
+
+      // === 攻击敌方建筑 ===
+      if (selUnit && !selUnit.attacked && cfg && cfg.atkRange > 0 &&
+          clickedBuilding && clickedBuilding.owner !== hp.index) {
+        // 1. 已在攻击范围内 → 直接攻击
+        if (canAttackBuilding(state, selUnit, tx, ty)) {
           resolveBuildingCombat(state, selUnit, tx, ty);
           updateAllExplored(state);
           syncAndRender();
           return;
         }
+        // 2. 不在攻击范围内但可移动 → 冲锋攻击后撤退
+        if (!selUnit.moved && cfg.move > 0) {
+          const atkTile = findAttackPosition(state, selUnit, tx, ty, cfg.atkRange, hp.index);
+          if (atkTile) {
+            chargeAndRetreat(state, selUnit, atkTile, () => {
+              resolveBuildingCombat(state, selUnit, tx, ty);
+            });
+            updateAllExplored(state);
+            syncAndRender();
+            return;
+          }
+        }
       }
 
+      // === 普通移动 ===
       if (selUnit && !selUnit.moved) {
         const reachable = getReachableTiles(state, selUnit, hp.index);
         if (reachable.has(`${tx},${ty}`) && (tx !== selUnit.x || ty !== selUnit.y)) {
@@ -1172,6 +1293,7 @@ export function useGame() {
     isHumanTurn, unitInfoText, actionMsg,
     buildMenuVisible, buildMenuItems, buildMenuTitle,
     btnEndTurnDisabled, btnBuildDisabled, btnProduceDisabled, btnSkipDisabled, btnDemolishDisabled,
+    btnRangedVisible, btnRangedDisabled, rangedMode,
     gameOverVisible, gameOverTitle, gameOverMsg, isCreating,
     // 存档
     saveMenuVisible, saveMenuMode, saveList, saveBusy, saveMsg,
@@ -1185,7 +1307,7 @@ export function useGame() {
     bigMapVisible, bigMapW, bigMapH,
     // 方法
     startGame, restartGame,
-    playerEndTurn, skipUnit, clearSelection, cancelPlacement,
+    playerEndTurn, skipUnit, clearSelection, cancelPlacement, toggleRangedMode,
     showBuildMenu, showProduceMenu, showDemolishMenu,
     openSaveMenu, closeSaveMenu, switchSaveMode, refreshSaveList,
     saveCurrentGame, loadSave, deleteSave,

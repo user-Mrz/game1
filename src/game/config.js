@@ -8,7 +8,7 @@ export const TERRAIN_COLORS = ['#f8f6f0','#c8c4bc','#9a9590','#d4d0c8','#ece8e0'
 export const UNIT_TYPES = {
   light_cavalry:  { name:'轻骑兵', move:4, atkRange:1, atkPerTroop:1, hpPerTroop:1, troops:100, foodConsumeMul:2, foodCap:2000, buildCost:4000, buildAt:'轻骑兵营' },
   infantry:       { name:'步兵',   move:1, atkRange:1, atkPerTroop:1, hpPerTroop:1, troops:1000, foodConsumeMul:1, foodCap:10000, buildCost:2000, buildAt:'步兵营' },
-  archer:         { name:'弓兵',   move:1, atkRange:2, atkPerTroop:1, hpPerTroop:1, troops:200, foodConsumeMul:1, foodCap:1000, buildCost:3000, buildAt:'弓兵营' },
+  archer:         { name:'弓兵',   move:1, atkRange:2, rangedAtkRange:4, rangedAtkMul:0.5, atkPerTroop:1, hpPerTroop:1, troops:200, foodConsumeMul:1, foodCap:1000, buildCost:3000, buildAt:'弓兵营' },
   heavy_cavalry:  { name:'重骑兵', move:1, moveCD:1, atkRange:1, atkPerTroop:2, hpPerTroop:10, troops:100, foodConsumeMul:4, foodCap:1000, buildCost:8000, buildAt:'重骑兵营' },
   supply:         { name:'后勤补给兵', move:1, atkRange:0, atkPerTroop:0, hpPerTroop:1, troops:100, foodConsumeMul:0, foodCap:10000, buildCost:6000, buildAt:'后勤补给兵营' },
 };
@@ -27,8 +27,19 @@ export const BUILDING_TYPES = {
   granary:      { name:'粮仓', hp:2000, atk:0, atkRange:0, visionRadius:1, buildable:true, buildCost:4000 },
 };
 
-// 黑白水墨玩家色：从浓墨到淡墨，10个灰度层次
-export const PLAYER_COLORS = ['#1a1a1a','#3a3a3a','#555555','#6e6e6e','#848484','#2e2e2e','#464646','#5c5c5c','#707070','#7e7e7e'];
+// 玩家色：中国传统颜料色，玩家为墨黑，每个AI独立色系
+export const PLAYER_COLORS = [
+  '#1a1a1a', // 玩家 — 墨黑
+  '#c0392b', // AI-1 — 朱砂红
+  '#2c6f9a', // AI-2 — 石青
+  '#a0733a', // AI-3 — 赭石
+  '#3a8a5c', // AI-4 — 石绿
+  '#c4a02a', // AI-5 — 藤黄
+  '#7a4c9a', // AI-6 — 紫毫
+  '#b03a6a', // AI-7 — 胭脂
+  '#3a5a8a', // AI-8 — 黛蓝
+  '#8a6e3a', // AI-9 — 茶褐
+];
 
 // 兵营类型到兵种映射（避免重复定义）
 export const BARRACKS_MAP = {

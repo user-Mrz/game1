@@ -10,6 +10,8 @@ export function getMoveCost(state, unit, x, y, playerIdx) {
   if (t === TERRAIN.MOUNTAIN) return Infinity;
   // 己方建筑可通行（成本1）；他人建筑（农田除外）不可通行
   if (isBuildingBlocked(state, x, y, playerIdx)) return Infinity;
+  // 有其他单位占据的格子不可通行
+  if (state.units.some(u => u.x === x && u.y === y && u.id !== unit.id)) return Infinity;
   let cost = 1;
   if (t === TERRAIN.RIVER) cost = 2;
   return cost;

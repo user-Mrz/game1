@@ -3,7 +3,7 @@
 import { TERRAIN, TERRAIN_COLORS, UNIT_TYPES, BUILDING_TYPES, PLAYER_COLORS } from './config.js';
 import { isVisibleToPlayer, isUnitVisibleToPlayer } from './vision.js';
 import { getReachableTiles } from './movement.js';
-import { canAttack } from './combat.js';
+import { canAttack, canRangedAttack, canRangedAttackBuilding } from './combat.js';
 import { getUnitById } from './units.js';
 import { updateTileSize, worldToScreen, clamp, getTerrain, getBuilding } from './utils.js';
 
@@ -104,7 +104,7 @@ export function render(state, canvas, minimapCanvas) {
       // 建筑
       const building = getBuilding(state, tx, ty);
       if (building) {
-        drawBuilding(ctx, sx, sy, ts, building, visible);
+        drawBuilding(ctx, sx, sy, ts, building, visible, viewIdx);
       }
     }
   }
@@ -149,7 +149,7 @@ export function render(state, canvas, minimapCanvas) {
 
       // 可攻击目标 — 浓墨虚线
       const cfg = UNIT_TYPES[sel.type];
-      if (!sel.attacked && cfg.atkRange > 0) {
+      if (!sel.attacked && cfg.atkRange > 0 && !state.rangedMode) {
         for (const enemy of state.units) {
           if (!canAttack(state, sel, enemy)) continue;
           if (!isUnitVisibleToPlayer(state, enemy, viewIdx)) continue;
@@ -165,6 +165,40 @@ export function render(state, canvas, minimapCanvas) {
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           ctx.fillText('伐', s.x, s.y - ts * 0.55);
+        }
+      }
+
+      // 远程攻击目标 — 朱砂红虚线（弓兵远程模式）
+      if (!sel.attacked && state.rangedMode && cfg.rangedAtkRange) {
+        for (const enemy of state.units) {
+          if (!canRangedAttack(state, sel, enemy)) continue;
+          if (!isUnitVisibleToPlayer(state, enemy, viewIdx)) continue;
+          const s = worldToScreen(state, enemy.x, enemy.y, w, h);
+          ctx.strokeStyle = '#c0392b';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([3, 3]);
+          ctx.strokeRect(s.x - ts / 2 - 3, s.y - ts / 2 - 3, ts + 6, ts + 6);
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#c0392b';
+          ctx.font = `${Math.floor(ts * 0.45)}px "Ma Shan Zheng",cursive`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('射', s.x, s.y - ts * 0.55);
+        }
+        // 远程可攻击建筑
+        for (const [bk, b] of state.buildings) {
+          if (!canRangedAttackBuilding(state, sel, b.x, b.y)) continue;
+          const s = worldToScreen(state, b.x, b.y, w, h);
+          ctx.strokeStyle = '#c0392b';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([3, 3]);
+          ctx.strokeRect(s.x - ts / 2 - 3, s.y - ts / 2 - 3, ts + 6, ts + 6);
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#c0392b';
+          ctx.font = `${Math.floor(ts * 0.45)}px "Ma Shan Zheng",cursive`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('射', s.x, s.y - ts * 0.55);
         }
       }
     }
@@ -294,9 +328,9 @@ function drawTerrainInk(ctx, sx, sy, ts, terrain) {
 // ========== 建筑绘制 — 黑白水墨印章 ==========
 function drawBuildingGhost(ctx, sx, sy, ts, b) {
   // 已探索不可见区域的建筑残影
-  ctx.globalAlpha = 0.25;
+  ctx.globalAlpha = 0.3;
   const icon = getBuildingIcon(b.type);
-  ctx.fillStyle = '#fff';
+  ctx.fillStyle = PLAYER_COLORS[b.owner] || '#fff';
   ctx.font = `${Math.floor(ts * 0.4)}px "Ma Shan Zheng",cursive`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -304,23 +338,26 @@ function drawBuildingGhost(ctx, sx, sy, ts, b) {
   ctx.globalAlpha = 1;
 }
 
-function drawBuilding(ctx, sx, sy, ts, b, visible) {
+function drawBuilding(ctx, sx, sy, ts, b, visible, viewIdx) {
   const icon = getBuildingIcon(b.type);
   const cx = sx + ts / 2, cy = sy + ts / 2;
   const r = ts * 0.42;
+  const ownerColor = PLAYER_COLORS[b.owner];
+  const isOwn = b.owner === viewIdx;
 
-  // 圆形底色 — 归属者墨色
+  // 圆形底色 — 己方淡墨，敌方彩色（与单位一致）
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  const ownerColor = PLAYER_COLORS[b.owner];
-  ctx.fillStyle = rgbaFromHex(ownerColor, b.owner === 0 ? 0.12 : 0.18);
+  ctx.fillStyle = isOwn ? INK.PAPER : rgbaFromHex(ownerColor, 0.25);
   ctx.fill();
-  ctx.strokeStyle = rgbaFromHex(ownerColor, 0.45);
-  ctx.lineWidth = b.owner === 0 ? 1.5 : 1;
+
+  // 边框 — 己方浓墨粗线，敌方彩色粗线（与单位一致）
+  ctx.strokeStyle = isOwn ? INK.BLACK : ownerColor;
+  ctx.lineWidth = isOwn ? 2 : 2;
   ctx.stroke();
 
-  // 建筑汉字
-  ctx.fillStyle = INK.BLACK;
+  // 建筑汉字 — 己方浓墨，敌方彩色（与单位一致）
+  ctx.fillStyle = isOwn ? INK.BLACK : ownerColor;
   ctx.font = `bold ${Math.floor(ts * 0.48)}px "Ma Shan Zheng","ZCOOL XiaoWei","STKaiti","KaiTi",cursive`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -335,7 +372,6 @@ function drawBuilding(ctx, sx, sy, ts, b, visible) {
     ctx.fillRect(sx + ts * 0.1, sy + ts - 6, barW, 3);
     ctx.fillStyle = hpPct > 0.5 ? 'rgba(0,0,0,0.5)' : hpPct > 0.25 ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.8)';
     ctx.fillRect(sx + ts * 0.1, sy + ts - 6, barW * hpPct, 3);
-    // HP条墨线边框
     ctx.strokeStyle = 'rgba(0,0,0,0.3)';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(sx + ts * 0.1, sy + ts - 6, barW, 3);
@@ -351,7 +387,7 @@ function getBuildingIcon(type) {
   return icons[type] || '□';
 }
 
-// ========== 单位绘制 — 黑白印章 ==========
+// ========== 单位绘制 — 水墨印章 ==========
 function drawUnit(ctx, cx, cy, ts, u, viewIdx) {
   const color = PLAYER_COLORS[u.owner];
   const icons = { light_cavalry: '骑', infantry: '步', archer: '弓', heavy_cavalry: '重', supply: '补' };
@@ -364,19 +400,19 @@ function drawUnit(ctx, cx, cy, ts, u, viewIdx) {
   ctx.fillStyle = 'rgba(0,0,0,0.08)';
   ctx.fill();
 
-  // 底色 — 白底黑边印章
+  // 底色 — 己方白底，敌方彩色底
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   if (isOwn) {
     ctx.fillStyle = INK.PAPER;
   } else {
-    ctx.fillStyle = rgbaFromHex(color, 0.15);
+    ctx.fillStyle = rgbaFromHex(color, 0.28);
   }
   ctx.fill();
 
-  // 边框 — 浓淡区分敌我
-  ctx.strokeStyle = isOwn ? INK.BLACK : rgbaFromHex(color, 0.6);
-  ctx.lineWidth = isOwn ? 2.5 : 1.5;
+  // 边框 — 己方浓墨粗框，敌方彩色框
+  ctx.strokeStyle = isOwn ? INK.BLACK : color;
+  ctx.lineWidth = isOwn ? 2.5 : 2;
   ctx.stroke();
 
   // 内圈 — 己方双圈
@@ -396,8 +432,8 @@ function drawUnit(ctx, cx, cy, ts, u, viewIdx) {
     ctx.fill();
   }
 
-  // 兵种汉字 — 浓墨
-  ctx.fillStyle = INK.BLACK;
+  // 兵种汉字 — 己方浓墨，敌方彩色
+  ctx.fillStyle = isOwn ? INK.BLACK : color;
   ctx.font = `bold ${Math.floor(ts * 0.48)}px "Ma Shan Zheng","ZCOOL XiaoWei","STKaiti","KaiTi",cursive`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';

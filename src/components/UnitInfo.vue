@@ -12,7 +12,7 @@
   >
     <div class="head">
       <span class="seal">{{ d.name }}</span>
-      <span class="owner">{{ d.ownerName }}</span>
+      <span class="owner" :style="{ color: d.ownerColor }">{{ d.ownerName }}</span>
       <span class="close-btn" @pointerdown.stop.prevent="close">×</span>
     </div>
     <div class="grid">
