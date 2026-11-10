@@ -1,7 +1,7 @@
 // Canvas 渲染系统 — 黑白水墨画风
 
 import { TERRAIN, TERRAIN_COLORS, UNIT_TYPES, BUILDING_TYPES, PLAYER_COLORS } from './config.js';
-import { isVisibleToPlayer, isUnitVisibleToPlayer } from './vision.js';
+import { isVisibleToPlayer, isUnitVisibleToPlayer, isBuildVisibleToPlayer } from './vision.js';
 import { getReachableTiles } from './movement.js';
 import { canAttack, canRangedAttack, canRangedAttackBuilding } from './combat.js';
 import { getUnitById } from './units.js';
@@ -235,29 +235,15 @@ export function render(state, canvas, minimapCanvas) {
     ctx.fillText(state.actionMsg, w / 2, h - 112);
   }
 
-  // 放置模式高亮 — 可建造的平原/沃土
+  // 放置模式高亮 — 只高亮「视野内 + 建造范围内」的可建造格
   if (state.pendingBuildType && viewIdx === (humanPlayer?.index ?? -1)) {
-    const cfg = BUILDING_TYPES[state.pendingBuildType];
     const buildR = getBuildRadius(state);
     const player = state.players[viewIdx];
-    if (player) {
-      // 建造范围圆圈（以主营为中心）
-      const hqS = worldToScreen(state, player.hqX, player.hqY, w, h);
-      const radiusPx = buildR * ts;
-      ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 4]);
-      ctx.strokeRect(hqS.x - radiusPx, hqS.y - radiusPx, radiusPx * 2, radiusPx * 2);
-      ctx.setLineDash([]);
-      ctx.fillStyle = 'rgba(0,0,0,0.04)';
-      ctx.fillRect(hqS.x - radiusPx, hqS.y - radiusPx, radiusPx * 2, radiusPx * 2);
-    }
     for (let ty = startY; ty <= startY + tilesY; ty++) {
       for (let tx = startX; tx <= startX + tilesX; tx++) {
         if (tx < 0 || ty < 0 || tx >= state.mapW || ty >= state.mapH) continue;
-        const explored = state.explored[viewIdx] ? state.explored[viewIdx][ty * state.mapW + tx] : 0;
-        const visible = isVisibleToPlayer(state, tx, ty, viewIdx);
-        if (!explored && !visible) continue;
+        // 用「建」的视野：哨塔的 8 格视野只能看，不能拿来铺建造区
+        if (!isBuildVisibleToPlayer(state, tx, ty, viewIdx)) continue;
         // 检查是否在建造范围内
         if (player && (Math.abs(tx - player.hqX) > buildR || Math.abs(ty - player.hqY) > buildR)) continue;
         // 检查是否可建造
@@ -385,6 +371,24 @@ function drawBuilding(ctx, sx, sy, ts, b, visible, viewIdx) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(icon, cx, cy - ts * 0.02);
+
+  // 产兵冷却角标：己方兵营还在整备时，右上角标剩余回合数
+  if (isOwn && b.cd > 0) {
+    const br = Math.max(7, ts * 0.16);
+    const bx0 = cx + r * 0.74, by0 = cy - r * 0.74;
+    ctx.beginPath();
+    ctx.arc(bx0, by0, br, 0, Math.PI * 2);
+    ctx.fillStyle = INK.PAPER;
+    ctx.fill();
+    ctx.strokeStyle = INK.BLACK;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = INK.BLACK;
+    ctx.font = `bold ${Math.max(8, Math.floor(br * 1.25))}px "Noto Serif SC",serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(b.cd), bx0, by0 + 0.5);
+  }
 
   // HP条 — 浓淡三段式
   const bCfg = BUILDING_TYPES[b.type];

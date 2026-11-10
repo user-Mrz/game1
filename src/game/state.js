@@ -1,6 +1,6 @@
 // 游戏状态工厂 + 初始化 + 回合系统
 
-import { PLAYER_COLORS, TERRAIN } from './config.js';
+import { PLAYER_COLORS, TERRAIN, BUILDING_TYPES } from './config.js';
 import { collectFood, consumeUnitSupplies, supplyNearby } from './economy.js';
 import { arrowTowerAttack, checkBuildingDestroyed } from './buildings.js';
 import { aiTurn } from './ai.js';
@@ -66,7 +66,9 @@ export function placeInitialBuildings(state) {
 
   for (let p = 0; p < numPlayers; p++) {
     const angle = (p / numPlayers) * Math.PI * 2;
-    const distFromCenter = Math.min(state.mapW, state.mapH) * 0.35;
+    // 出生环半径：必须落在「部队作战半径」之内，否则任何进攻都会在半路断粮。
+    // 0.20 × 地图边长，配合 8 回合续航与 2 格移动，能在 15~20 回合形成接触。
+    const distFromCenter = Math.min(state.mapW, state.mapH) * 0.2;
     const cx = state.mapW / 2 + Math.cos(angle) * distFromCenter;
     const cy = state.mapH / 2 + Math.sin(angle) * distFromCenter;
 
@@ -79,18 +81,39 @@ export function placeInitialBuildings(state) {
       tries++;
     }
 
-    state.buildings.set(`${hx},${hy}`, { type: 'hq', owner: p, hp: 10000 });
+    state.buildings.set(`${hx},${hy}`, { type: 'hq', owner: p, hp: BUILDING_TYPES.hq.hp });
     state.players[p].hqX = hx;
     state.players[p].hqY = hy;
 
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
-      const fx = hx + dx, fy = hy + dy;
-      if (fx >= 0 && fy >= 0 && fx < state.mapW && fy < state.mapH &&
-          state.terrain[fy * state.mapW + fx] !== TERRAIN.MOUNTAIN &&
-          state.terrain[fy * state.mapW + fx] !== TERRAIN.FOREST &&
-          !state.buildings.get(`${fx},${fy}`)) {
-        state.buildings.set(`${fx},${fy}`, { type: 'farm', owner: p, hp: 1000 });
-        break;
+    // 出生地整平：清掉主营 5×5 内的山地，避免随机地形把某个玩家彻底困死（原本只有人类玩家享受这个待遇）
+    if (state.terrain) {
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const nx = hx + dx, ny = hy + dy;
+          if (nx < 0 || ny < 0 || nx >= state.mapW || ny >= state.mapH) continue;
+          if (state.terrain[ny * state.mapW + nx] === TERRAIN.MOUNTAIN) {
+            state.terrain[ny * state.mapW + nx] = TERRAIN.PLAIN;
+          }
+        }
+      }
+    }
+
+    // 开局农田：优先贴主营 1 格，找不到再退到 2 格，避免"没有农田=经济停摆"
+    let farmPlaced = false;
+    for (const r of [1, 2]) {
+      if (farmPlaced) break;
+      for (let dy = -r; dy <= r && !farmPlaced; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const fx = hx + dx, fy = hy + dy;
+          if (fx < 0 || fy < 0 || fx >= state.mapW || fy >= state.mapH) continue;
+          if (state.buildings.get(`${fx},${fy}`)) continue;
+          const t = state.terrain ? state.terrain[fy * state.mapW + fx] : TERRAIN.PLAIN;
+          if (t === TERRAIN.MOUNTAIN || t === TERRAIN.FOREST) continue;
+          state.buildings.set(`${fx},${fy}`, { type: 'farm', owner: p, hp: BUILDING_TYPES.farm.hp });
+          farmPlaced = true;
+          break;
+        }
       }
     }
   }
@@ -136,12 +159,14 @@ function preparePlayerTurn(state, playerIdx) {
   }
 
   for (const [bkey, b] of state.buildings) {
-    if (b.owner === playerIdx && b.type === 'farm' && b.hp < 1000) {
-      b.hp = Math.min(1000, b.hp + 100);
-    }
-    if (b.owner === playerIdx && b.type === 'granary' && b.hp < 2000) {
-      b.hp = Math.min(2000, b.hp + 200);
-    }
+    if (b.owner !== playerIdx) continue;
+    // 产兵冷却递减：cd=3 表示还要等 3 个回合
+    if (b.cd > 0) b.cd--;
+    const maxHp = BUILDING_TYPES[b.type]?.hp;
+    if (!maxHp) continue;
+    // 农田 +100/回合，粮仓 +200/回合（被占领后的重建速度）
+    if (b.type === 'farm' && b.hp < maxHp) b.hp = Math.min(maxHp, b.hp + 100);
+    if (b.type === 'granary' && b.hp < maxHp) b.hp = Math.min(maxHp, b.hp + 200);
   }
 
   state.currentPlayer = prev;

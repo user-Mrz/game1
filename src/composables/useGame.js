@@ -12,8 +12,8 @@ import { getReachableTiles, moveUnit } from '../game/movement.js';
 import { canAttack, resolveCombat, canAttackBuilding, resolveBuildingCombat, canRangedAttack, canRangedAttackBuilding, resolveRangedCombat, resolveRangedBuildingCombat, chargeAndRetreat } from '../game/combat.js';
 import { getBuilding, screenToWorld, worldToScreen, updateTileSize, clamp, dist } from '../game/utils.js';
 import { getUnitsAt } from '../game/units.js';
-import { canBuildOn, isInBuildRange, buildStructure, canProduce, produceUnit, demolishStructure } from '../game/buildings.js';
-import { UNIT_TYPES, BUILDING_TYPES, BARRACKS_TYPE_MAP, DIFFICULTY } from '../game/config.js';
+import { canBuildOn, getBuildBlockReason, countPlayerBuildings, getBuildRadius, getProduceCooldown, buildStructure, canProduce, produceUnit, demolishStructure } from '../game/buildings.js';
+import { UNIT_TYPES, BUILDING_TYPES, BARRACKS_TYPE_MAP, DIFFICULTY, BUILD_RULES, unitHungerMul } from '../game/config.js';
 import { TERRAIN } from '../game/config.js';
 import { saveApi } from '../api/saveApi.js';
 import { simApi } from '../api/simApi.js';
@@ -112,7 +112,12 @@ export function useGame() {
       const hp = selUnit.troops * cfg.hpPerTroop;
       const atkPower = selUnit.troops * cfg.atkPerTroop;
       const rangedInfo = cfg.rangedAtkRange ? ` | 远程射程:${cfg.rangedAtkRange}格(半伤)` : '';
-      unitInfoText.value = `${cfg.name} 兵力:${selUnit.troops} | 血量:${hp}/${maxHp} | 攻击力:${atkPower} | 粮草:${selUnit.supplies}/${cfg.foodCap} | 移动:${selUnit.moved ? '已用' : '可用'} | 攻击:${selUnit.attacked ? '已用' : '可用'}${rangedInfo}`;
+      // 饥兵提示：储备见底时攻击力打折，必须让玩家看到，否则"打不动"会变成玄学
+      const hungerMul = unitHungerMul(selUnit);
+      const hungerInfo = hungerMul < 1
+        ? ` | ⚠缺粮 攻击力×${hungerMul.toFixed(2)}（实际 ${Math.floor(atkPower * hungerMul)}）`
+        : '';
+      unitInfoText.value = `${cfg.name} 兵力:${selUnit.troops} | 血量:${hp}/${maxHp} | 攻击力:${Math.floor(atkPower)}${hungerInfo} | 粮草:${selUnit.supplies}/${cfg.foodCap} | 移动:${selUnit.moved ? '已用' : '可用'} | 攻击:${selUnit.attacked ? '已用' : '可用'}${rangedInfo}`;
       // 不再自动设置 unitDetail，让左键选择不显示信息卡片
       btnSkipDisabled.value = !isHumanTurn.value || state.aiThinking;
       // 远程攻击按钮：仅弓兵可见
@@ -370,7 +375,7 @@ export function useGame() {
       const infTile = findTutorialTile(state, hp.hqX, hp.hqY);
       if (infTile) spawnUnit(state, 0, 'infantry', infTile.x, infTile.y);
       const barTile = findTutorialTile(state, hp.hqX, hp.hqY);
-      if (barTile) state.buildings.set(`${barTile.x},${barTile.y}`, { type: 'infantry_barracks', owner: 0, hp: 1000 });
+      if (barTile) state.buildings.set(`${barTile.x},${barTile.y}`, { type: 'infantry_barracks', owner: 0, hp: BUILDING_TYPES.infantry_barracks.hp, cd: 0 });
 
       // 敌方靶子（主营东侧约4格）
       const enemyTile = findTutorialTile(state, hp.hqX + 4, hp.hqY)
@@ -520,9 +525,17 @@ export function useGame() {
   }
 
   // 回合结算：优先交给后端执行（省浏览器内存/CPU），后端不可用时回退本地结算
+  //
+  // ⚠ 结算通道开关：true = 走后端 /api/sim/end-turn，false = 本地结算
+  // 当前默认 false。原因：后端 SimEngine 的 AI 还是旧一代实现（贪心寻路、没有"作战目标"、
+  // 没有围攻不撤退、没有饥兵系数、没有收支闸门），而前端这套是逐条压测过的。
+  // 一旦走服务端，玩家实际对战的 AI 和这里调好的数值不是同一套 —— 这是玩家可见的行为分叉，
+  // 不是代码整洁问题。等 Java AI 补齐、并跑通 scripts/verify-sim.mjs 对齐之后再切回 true。
+  const USE_SERVER_SIM = false;
+
   async function runEndTurn() {
-    if (state.tutorialMode) {
-      // 教学关无 AI，直接本地结算
+    if (state.tutorialMode || !USE_SERVER_SIM) {
+      // 教学关无 AI，且当前默认使用本地结算
       endTurn(state, doRender, refreshUI, handleGameOver);
       return;
     }
@@ -549,6 +562,7 @@ export function useGame() {
         type: b.type,
         owner: b.owner,
         hp: b.hp,
+        cd: b.cd || 0,
         lastHitBy: b.lastHitBy,
       }])
     );
@@ -686,6 +700,8 @@ export function useGame() {
           move: ut.move,
           atkRange: ut.atkRange,
           buildCost: ut.buildCost,
+          produceTurns: ut.produceTurns || 1,
+          produceCd: b.cd || 0,
         } : null,
       };
       return;
@@ -945,17 +961,32 @@ export function useGame() {
     for (const [btype, cfg] of Object.entries(BUILDING_TYPES)) {
       if (!cfg.buildable) continue;
       const affordable = hp.food >= cfg.buildCost;
+      // 哨塔有数量上限：先在建菜单里灰掉，避免玩家选完才发现铺不下
+      const towerFull = btype === 'watchtower'
+        && countPlayerBuildings(state, hp.index, 'watchtower') >= BUILD_RULES.maxWatchtowers;
       items.push({
         label: `${cfg.name} 🌾${cfg.buildCost}`,
         action: () => startPlacement(btype),
-        disabled: !affordable,
-        hint: !affordable ? ' (粮草不足)' : ''
+        disabled: !affordable || towerFull,
+        hint: towerFull ? ` (已达上限 ${BUILD_RULES.maxWatchtowers} 座)`
+          : (!affordable ? ' (粮草不足)' : '')
       });
     }
 
     items.push({ label: '取消', action: () => { buildMenuVisible.value = false; }, disabled: false, hint: '' });
     buildMenuItems.value = items;
     buildMenuVisible.value = true;
+  }
+
+  // 建造视野只由兵种提供，部队全在外时可能一格都建不了——提前给提示，别让玩家对着全屏黑猜
+  function hasBuildableSpot(hp, buildingType) {
+    const r = getBuildRadius(state);
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (canBuildOn(state, hp.hqX + dx, hp.hqY + dy, hp.index, buildingType)) return true;
+      }
+    }
+    return false;
   }
 
   function startPlacement(buildingType) {
@@ -965,7 +996,11 @@ export function useGame() {
     isPlacing.value = true;
     state.selectedUnitId = null;
     state.selectedBuilding = null;
-    state.actionMsg = `点击平原或沃土放置${BUILDING_TYPES[buildingType].name}`;
+    const hp = state.players.find(p => p.isHuman && p.alive);
+    const name = BUILDING_TYPES[buildingType].name;
+    state.actionMsg = (hp && !hasBuildableSpot(hp, buildingType))
+      ? `没有可建造的位置：建造视野只由部队提供，先把兵往前推或留一支守备队。`
+      : `点击平原或沃土放置${name}`;
     syncAndRender();
   }
 
@@ -981,14 +1016,9 @@ export function useGame() {
     const hp = state.players.find(p => p.isHuman && p.alive);
     if (!hp || state.currentPlayer !== hp.index) return false;
 
-    if (!isInBuildRange(state, tx, ty, hp.index)) {
-      state.actionMsg = '超出建筑范围！';
-      syncAndRender();
-      return false;
-    }
-
-    if (!canBuildOn(state, tx, ty, hp.index)) {
-      state.actionMsg = '无法在此建造！仅平原和沃土可建造。';
+    const blockReason = getBuildBlockReason(state, tx, ty, hp.index, pendingBuildType);
+    if (blockReason) {
+      state.actionMsg = `${blockReason}！`;
       syncAndRender();
       return false;
     }
@@ -1018,7 +1048,7 @@ export function useGame() {
 
   function isPlacingValid(state, x, y, playerIdx) {
     if (!pendingBuildType) return false;
-    return canBuildOn(state, x, y, playerIdx);
+    return canBuildOn(state, x, y, playerIdx, pendingBuildType);
   }
 
   function showProduceMenu() {
@@ -1026,7 +1056,14 @@ export function useGame() {
     if (!hp || !state.selectedBuilding) return;
     const bk = `${state.selectedBuilding.x},${state.selectedBuilding.y}`;
     const bType = canProduce(state, hp.index, bk);
-    if (!bType) return;
+    if (!bType) {
+      const cd = getProduceCooldown(state, bk);
+      if (cd > 0) {
+        state.actionMsg = `该兵营整备中，还需 ${cd} 回合才能生产。`;
+        syncAndRender();
+      }
+      return;
+    }
 
     const unitType = BARRACKS_TYPE_MAP[bType];
     if (!unitType) return;
@@ -1036,7 +1073,7 @@ export function useGame() {
     const affordable = hp.food >= cfg.buildCost;
 
     buildMenuItems.value = [
-      { label: `${cfg.name} (${cfg.troops}兵) 🌾${cfg.buildCost}`, action: () => tryProduce(unitType), disabled: !affordable, hint: '' },
+      { label: `${cfg.name} (${cfg.troops}兵) 🌾${cfg.buildCost} · ${cfg.produceTurns}回合`, action: () => tryProduce(unitType), disabled: !affordable, hint: '' },
       { label: '取消', action: () => { buildMenuVisible.value = false; }, disabled: false, hint: '' }
     ];
     buildMenuVisible.value = true;

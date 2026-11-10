@@ -19,4 +19,5 @@ public class SimRequest {
     public int nextUnitId;
     public Integer seed;
     public Boolean tutorialMode;
+    public String difficulty;
 }

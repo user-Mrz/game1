@@ -58,6 +58,7 @@ public class SimService {
                 b.type = e.type;
                 b.owner = e.owner;
                 b.hp = e.hp;
+                b.cd = e.cd != null ? e.cd : 0;
                 b.lastHitBy = e.lastHitBy;
                 s.buildings.put(e.key, b);
             }
@@ -66,6 +67,7 @@ public class SimService {
         s.turn = req.turn;
         s.nextUnitId = req.nextUnitId;
         s.tutorialMode = req.tutorialMode != null && req.tutorialMode;
+        s.difficulty = (req.difficulty == null || req.difficulty.isEmpty()) ? "easy" : req.difficulty;
         return s;
     }
 
@@ -150,6 +152,7 @@ public class SimService {
             be.type = b.type;
             be.owner = b.owner;
             be.hp = b.hp;
+            be.cd = b.cd;
             be.lastHitBy = b.lastHitBy;
             r.buildings.add(be);
         }

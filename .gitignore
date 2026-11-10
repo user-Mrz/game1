@@ -25,3 +25,24 @@ Thumbs.db
 # 环境变量
 .env
 .env.local
+
+# 本地数据库（运行时生成，不入库）
+backend/data/
+*.db
+*.db-journal
+*.sqlite
+
+# 测试与临时脚本（不入库）
+scripts/
+*.bak
+*.tmp
+*.orig
+
+# 开发过程记录与临时产物（不入库）
+progress.md
+findings.md
+task_plan.md
+.screenshots/
+.trae-html-share-packages/
+.workbuddy/
+*.log

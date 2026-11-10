@@ -11,5 +11,6 @@ public class SimBuildingEntry {
     public String type;
     public int owner;
     public int hp;
+    public Integer cd;
     public Integer lastHitBy;
 }

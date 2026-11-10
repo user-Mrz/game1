@@ -22,7 +22,7 @@ export function serializeGameState(state) {
     // terrain 不再序列化，由后端 MapService 按 gameId 查找
     explored: state.explored.map(e => (e ? Array.from(e) : null)),
     buildings: Array.from(state.buildings.entries()).map(([k, v]) => ({
-      key: k, type: v.type, owner: v.owner, hp: v.hp,
+      key: k, type: v.type, owner: v.owner, hp: v.hp, cd: v.cd || 0,
       ...(v.lastHitBy !== undefined ? { lastHitBy: v.lastHitBy } : {}),
     })),
     players: state.players.map(p => ({ ...p })),
@@ -38,7 +38,7 @@ export function deserializeGameState(data) {
     terrain: null, // 由调用方异步从后端获取
     explored: (data.explored || []).map(e => (e ? new Uint8Array(e) : null)),
     buildings: new Map(
-      (data.buildings || []).map(b => [b.key, { type: b.type, owner: b.owner, hp: b.hp, lastHitBy: b.lastHitBy }])
+      (data.buildings || []).map(b => [b.key, { type: b.type, owner: b.owner, hp: b.hp, cd: b.cd || 0, lastHitBy: b.lastHitBy }])
     ),
     effects: [], // 反序列化后重置效果队列
   };

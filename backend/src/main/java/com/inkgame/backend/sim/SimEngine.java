@@ -166,21 +166,30 @@ public final class SimEngine {
 
     // ========== 战斗 ==========
 
+    /** 有效攻击距离：弓兵移动后只能贴脸射击（与前端 moveShootRange 一致） */
+    static int effectiveRange(Unit attacker, UnitCfg cfg) {
+        if (attacker.moved && cfg.moveShootRange() > 0) {
+            return Math.min(cfg.atkRange(), cfg.moveShootRange());
+        }
+        return cfg.atkRange();
+    }
+
     static boolean canAttack(GameState s, Unit attacker, Unit defender) {
         if (attacker.id == defender.id) return false;
         if (attacker.owner == defender.owner) return false;
         if (attacker.attacked) return false;
         UnitCfg cfg = GameConfig.UNIT_TYPES.get(attacker.type);
         if (cfg.atkRange() == 0) return false;
-        return dist(attacker.x, attacker.y, defender.x, defender.y) <= cfg.atkRange();
+        return dist(attacker.x, attacker.y, defender.x, defender.y) <= effectiveRange(attacker, cfg);
     }
 
     static void resolveCombat(GameState s, Unit attacker, Unit defender) {
         UnitCfg atkCfg = GameConfig.UNIT_TYPES.get(attacker.type);
         UnitCfg defCfg = GameConfig.UNIT_TYPES.get(defender.type);
-        int atkPower = attacker.troops * atkCfg.atkPerTroop();
+        // 饥兵系数：储备见底的部队打不动（与前端 combat.js 一致）
+        int damage = (int) (attacker.troops * atkCfg.atkPerTroop()
+                * GameConfig.unitHungerMul(atkCfg, attacker.supplies, attacker.troops));
         int defHP = defender.troops * defCfg.hpPerTroop();
-        int damage = atkPower;
         int remainingHP = Math.max(0, defHP - damage);
         int remainingTroops = (remainingHP + defCfg.hpPerTroop() - 1) / defCfg.hpPerTroop();
 
@@ -191,10 +200,8 @@ public final class SimEngine {
         s.actionMsg.append(atkCfg.name()).append("攻击").append(defCfg.name())
                 .append("，造成").append(damage).append("伤害！");
 
-        // 击杀后勤补给兵奖励
+        // 击杀后勤补给兵的奖励：只补满击杀者自身储备（与前端一致）
         if (defender.troops <= 0 && "supply".equals(defender.type)) {
-            Player killer = s.players.get(attacker.owner);
-            killer.food += atkCfg.foodCap() * 5;
             attacker.supplies = atkCfg.foodCap();
         }
 
@@ -211,7 +218,7 @@ public final class SimEngine {
         if (attacker.attacked) return false;
         UnitCfg cfg = GameConfig.UNIT_TYPES.get(attacker.type);
         if (cfg.atkRange() == 0) return false;
-        return dist(attacker.x, attacker.y, x, y) <= cfg.atkRange();
+        return dist(attacker.x, attacker.y, x, y) <= effectiveRange(attacker, cfg);
     }
 
     static boolean resolveBuildingCombat(GameState s, Unit attacker, int x, int y) {
@@ -219,7 +226,8 @@ public final class SimEngine {
         if (b == null) return false;
         UnitCfg atkCfg = GameConfig.UNIT_TYPES.get(attacker.type);
         BuildingCfg bCfg = GameConfig.BUILDING_TYPES.get(b.type);
-        int damage = attacker.troops * atkCfg.atkPerTroop();
+        int damage = (int) (attacker.troops * atkCfg.atkPerTroop()
+                * GameConfig.unitHungerMul(atkCfg, attacker.supplies, attacker.troops));
         b.hp = Math.max(0, b.hp - damage);
         b.lastHitBy = attacker.owner;
         attacker.attacked = true;
@@ -236,20 +244,36 @@ public final class SimEngine {
 
     static int collectFood(GameState s) {
         Player player = s.players.get(s.currentPlayer);
-        int collected = 0;
-        for (Map.Entry<String, Building> e : s.buildings.entrySet()) {
-            Building b = e.getValue();
-            if (b.owner == s.currentPlayer && "farm".equals(b.type)) {
-                String[] p = e.getKey().split(",");
-                int bx = Integer.parseInt(p[0]);
-                int by = Integer.parseInt(p[1]);
-                int amount = GameConfig.FARM_FOOD_PER_TURN;
-                if (getTerrain(s, bx, by) == GameConfig.FERTILE) amount *= 2;
-                collected += amount;
-            }
-        }
+        int collected = estimateFarmIncome(s, s.currentPlayer);
         player.food += collected;
         return collected;
+    }
+
+    /** 该玩家每回合的农田产出（含沃土加成），用于判断"养得起多大规模的军队" */
+    static int estimateFarmIncome(GameState s, int playerIdx) {
+        int total = 0;
+        for (Map.Entry<String, Building> e : s.buildings.entrySet()) {
+            Building b = e.getValue();
+            if (b.owner != playerIdx || !"farm".equals(b.type)) continue;
+            String[] p = e.getKey().split(",");
+            int amount = GameConfig.FARM_FOOD_PER_TURN;
+            if (getTerrain(s, Integer.parseInt(p[0]), Integer.parseInt(p[1])) == GameConfig.FERTILE) amount *= 2;
+            total += amount;
+        }
+        return total;
+    }
+
+    /** 该玩家全军每回合的维持开销（折算成粮草）：Σ troops × foodConsumeMul ÷ 粮仓换算率 */
+    static int estimateArmyUpkeep(GameState s, int playerIdx) {
+        int conv = GameConfig.GRANARY_CONV > 0 ? GameConfig.GRANARY_CONV : 1;
+        double total = 0;
+        for (Unit u : s.units) {
+            if (u.owner != playerIdx) continue;
+            UnitCfg cfg = GameConfig.UNIT_TYPES.get(u.type);
+            if (cfg == null || cfg.foodConsumeMul() == 0) continue;
+            total += (double) (u.troops * cfg.foodConsumeMul()) / conv;
+        }
+        return (int) total;
     }
 
     static void consumeUnitSupplies(GameState s) {
@@ -311,7 +335,26 @@ public final class SimEngine {
         if (t != GameConfig.PLAIN && t != GameConfig.FERTILE) return false;
         if (getBuilding(s, x, y) != null) return false;
         if (!getUnitsAt(s, x, y).isEmpty()) return false;
+        // 与前端一致：只能在己方当前视野内建造
+        if (!isBuildVisibleTo(s, x, y, playerIdx)) return false;
         return true;
+    }
+
+    /**
+     * 「建」的视野：只有兵种（移动力×3）提供；建筑一律不提供，否则会自我滚动。
+     * 唯一豁免：主营周围 1 格，保证老家永远能补建，不会因部队外出而彻底停摆。
+     */
+    static boolean isBuildVisibleTo(GameState s, int x, int y, int playerIdx) {
+        Player p = s.players.get(playerIdx);
+        if (p == null || !p.alive) return false;
+        if (Math.abs(x - p.hqX) <= 1 && Math.abs(y - p.hqY) <= 1) return true;
+        for (Unit u : s.units) {
+            if (u.owner != playerIdx) continue;
+            UnitCfg c = GameConfig.UNIT_TYPES.get(u.type);
+            int r = c != null ? c.move() * 3 : 3;
+            if (Math.abs(x - u.x) <= r && Math.abs(y - u.y) <= r) return true;
+        }
+        return false;
     }
 
     static boolean buildStructure(GameState s, int playerIdx, int x, int y, String buildingType) {
@@ -335,6 +378,7 @@ public final class SimEngine {
         int by = Integer.parseInt(p[1]);
         Building b = s.buildings.get(buildingKey);
         if (b == null || b.owner != playerIdx) return null;
+        if (b.cd > 0) return null;
         for (Unit u : s.units) {
             if (u.x == bx && u.y == by && u.owner != playerIdx) return null;
         }
@@ -369,6 +413,7 @@ public final class SimEngine {
 
         player.food -= cfg.buildCost();
         spawnUnit(s, playerIdx, unitType, placeX, placeY);
+        b.cd = cfg.produceTurns() > 0 ? cfg.produceTurns() : 1;
         s.actionMsg.setLength(0);
         s.actionMsg.append("生产了").append(cfg.name()).append("！");
         return true;
@@ -406,9 +451,12 @@ public final class SimEngine {
         if (player == null) return;
         int needed = cfg.foodCap() - unit.supplies;
         if (needed > 0 && player.food > 0) {
-            int give = Math.min(needed, player.food);
+            // 换算率全局唯一（储备可被补给兵 1:1 流通，各兵种不同汇率会产生套利），与前端 buildings.js 一致
+            BuildingCfg bCfg = GameConfig.BUILDING_TYPES.get("granary");
+            int conv = (bCfg != null && bCfg.granaryConv() > 0) ? bCfg.granaryConv() : 1;
+            int give = Math.min(needed, player.food * conv);
             unit.supplies += give;
-            player.food -= give;
+            player.food -= (give + conv - 1) / conv;
             s.actionMsg.append("粮仓补充").append(give).append("粮草给").append(cfg.name()).append("；");
         }
     }
@@ -491,11 +539,15 @@ public final class SimEngine {
         }
         for (Map.Entry<String, Building> e : s.buildings.entrySet()) {
             Building b = e.getValue();
-            if (b.owner == playerIdx && "farm".equals(b.type) && b.hp < 1000) {
-                b.hp = Math.min(1000, b.hp + 100);
+            BuildingCfg bCfg = GameConfig.BUILDING_TYPES.get(b.type);
+            if (bCfg == null || b.owner != playerIdx) continue;
+            if (b.cd > 0) b.cd--;
+            int maxHp = bCfg.hp();
+            if ("farm".equals(b.type) && b.hp < maxHp) {
+                b.hp = Math.min(maxHp, b.hp + 100);
             }
-            if (b.owner == playerIdx && "granary".equals(b.type) && b.hp < 2000) {
-                b.hp = Math.min(2000, b.hp + 200);
+            if ("granary".equals(b.type) && b.hp < maxHp) {
+                b.hp = Math.min(maxHp, b.hp + 200);
             }
         }
 
@@ -504,19 +556,118 @@ public final class SimEngine {
 
     // ========== AI ==========
 
+    // 建筑上限：AI 每回合都能造一栋，没有上限会在 30 回合内堆出 20+ 箭塔
+    static final java.util.Map<String, Integer> AI_BUILD_CAP = java.util.Map.of(
+            "farm", 4, "supply_barracks", 1, "granary", 2,
+            "infantry_barracks", 2, "archer_barracks", 2, "lc_barracks", 1, "hc_barracks", 1,
+            "arrow_tower", 5, "watchtower", 2, "wall", 6
+    );
+
+    static String diffOf(GameState s) {
+        return s.difficulty == null ? "easy" : s.difficulty;
+    }
+
+    static int produceThreshold(GameState s) {
+        switch (diffOf(s)) {
+            case "normal": return 900;
+            case "hard": return 600;
+            case "extreme": return 400;
+            default: return 1200;
+        }
+    }
+
+    static int buildThreshold(GameState s) {
+        switch (diffOf(s)) {
+            case "normal": return 1200;
+            case "hard": return 900;
+            case "extreme": return 700;
+            default: return 1500;
+        }
+    }
+
+    static int aiBuildRadius(GameState s) {
+        switch (diffOf(s)) {
+            case "normal": return 5;
+            case "hard": return 7;
+            case "extreme": return 9;
+            default: return 3;
+        }
+    }
+
+    static int countBuildings(GameState s, int playerIdx, String type) {
+        int n = 0;
+        for (Building b : s.buildings.values()) {
+            if (b.owner == playerIdx && type.equals(b.type)) n++;
+        }
+        return n;
+    }
+
+    static boolean underCap(GameState s, int playerIdx, String type) {
+        return countBuildings(s, playerIdx, type) < AI_BUILD_CAP.getOrDefault(type, 1);
+    }
+
+    // 经济优先级：2 农田 → 后勤营 → 粮仓 → 第 3 农田 → 兵营 → 按上限补
+    static String aiNextBuild(GameState s, int playerIdx, DoubleSupplier rand) {
+        if (countBuildings(s, playerIdx, "farm") < 2 && underCap(s, playerIdx, "farm")) return "farm";
+        if (underCap(s, playerIdx, "supply_barracks")) return "supply_barracks";
+        if (underCap(s, playerIdx, "granary")) return "granary";
+        if (countBuildings(s, playerIdx, "farm") < 3 && underCap(s, playerIdx, "farm")) return "farm";
+        if (underCap(s, playerIdx, "infantry_barracks")) return "infantry_barracks";
+        if (underCap(s, playerIdx, "archer_barracks")) return "archer_barracks";
+
+        List<String> pool = new ArrayList<>();
+        if (underCap(s, playerIdx, "arrow_tower")) { pool.add("arrow_tower"); pool.add("arrow_tower"); }
+        if (underCap(s, playerIdx, "infantry_barracks")) pool.add("infantry_barracks");
+        if (underCap(s, playerIdx, "archer_barracks")) pool.add("archer_barracks");
+        if (underCap(s, playerIdx, "lc_barracks")) pool.add("lc_barracks");
+        if (underCap(s, playerIdx, "hc_barracks")) pool.add("hc_barracks");
+        if (underCap(s, playerIdx, "watchtower")) pool.add("watchtower");
+        if (underCap(s, playerIdx, "wall")) pool.add("wall");
+        if (underCap(s, playerIdx, "farm")) pool.add("farm");
+        if (pool.isEmpty()) return null;
+        return pool.get((int) (rand.getAsDouble() * pool.size()));
+    }
+
     static void aiTurn(GameState s, DoubleSupplier rand) {
         int playerIdx = s.currentPlayer;
         Player player = s.players.get(playerIdx);
         if (player == null || !player.alive) return;
 
-        aiProduceUnits(s, playerIdx);
-        aiBuildStructures(s, playerIdx, rand);
+        String nextBuild = aiNextBuild(s, playerIdx, rand);
+        aiProduceUnits(s, playerIdx, nextBuild);
+        aiBuildStructures(s, playerIdx, rand, nextBuild);
         aiMoveAndAttack(s, playerIdx);
+        aiLogistics(s, playerIdx);
     }
 
-    private static void aiProduceUnits(GameState s, int playerIdx) {
+    private static void aiProduceUnits(GameState s, int playerIdx, String nextBuild) {
         Player player = s.players.get(playerIdx);
         String[] priority = {"infantry", "archer", "light_cavalry", "supply", "heavy_cavalry"};
+        int combatCount = 0, supplyCount = 0;
+        for (Unit u : s.units) {
+            if (u.owner != playerIdx) continue;
+            if ("supply".equals(u.type)) supplyCount++; else combatCount++;
+        }
+        // 补给兵上限：每 3 个战斗单位配 1 个补给兵
+        int supplyCap = Math.max(1, (combatCount + 2) / 3);
+        int reserve = 0;
+        if (nextBuild != null) {
+            BuildingCfg nb = GameConfig.BUILDING_TYPES.get(nextBuild);
+            if (nb != null) reserve = nb.buildCost();
+        }
+
+        // 后勤闸门（与前端 ai.js 一致）：过半部队缺粮，或全军维持需求超过农田产出，
+        // 就停止扩军——只看粮草余额是错的，余额反映"这阵子没花完"，不反映"养不养得起"
+        int lowCount = 0;
+        for (Unit u : s.units) {
+            if (u.owner != playerIdx || "supply".equals(u.type)) continue;
+            UnitCfg uc = GameConfig.UNIT_TYPES.get(u.type);
+            if (uc != null && uc.foodCap() > 0 && u.supplies < uc.foodCap() * 0.4) lowCount++;
+        }
+        int income = estimateFarmIncome(s, playerIdx);
+        int upkeep = estimateArmyUpkeep(s, playerIdx);
+        boolean overCapacity = combatCount > 0 && upkeep > income;
+        boolean starving = combatCount > 0 && (lowCount * 2 > combatCount || overCapacity);
 
         for (Map.Entry<String, Building> e : s.buildings.entrySet()) {
             Building b = e.getValue();
@@ -528,7 +679,9 @@ public final class SimEngine {
                 UnitCfg cfg = GameConfig.UNIT_TYPES.get(utype);
                 String produced = GameConfig.BARRACKS_TYPE_MAP.get(bType);
                 if (produced == null || !produced.equals(utype)) continue;
-                if (player.food >= cfg.buildCost() + 3000) {
+                if ("supply".equals(utype) && supplyCount >= supplyCap) break;
+                if (!"supply".equals(utype) && starving) break;
+                if (player.food >= cfg.buildCost() + produceThreshold(s) + reserve) {
                     produceUnit(s, playerIdx, e.getKey(), utype);
                     break;
                 }
@@ -536,14 +689,16 @@ public final class SimEngine {
         }
     }
 
-    private static void aiBuildStructures(GameState s, int playerIdx, DoubleSupplier rand) {
+    private static void aiBuildStructures(GameState s, int playerIdx, DoubleSupplier rand, String buildOrder) {
+        if (buildOrder == null) return;
         Player player = s.players.get(playerIdx);
-        if (player.food < 3000) return;
+        if (player.food < buildThreshold(s)) return;
 
         int hqX = player.hqX, hqY = player.hqY;
+        int buildR = aiBuildRadius(s);
         List<int[]> candidates = new ArrayList<>();
-        for (int dy = -3; dy <= 3; dy++) {
-            for (int dx = -3; dx <= 3; dx++) {
+        for (int dy = -buildR; dy <= buildR; dy++) {
+            for (int dx = -buildR; dx <= buildR; dx++) {
                 int x = hqX + dx, y = hqY + dy;
                 if (canBuildOn(s, x, y, playerIdx)) candidates.add(new int[]{x, y});
             }
@@ -551,21 +706,8 @@ public final class SimEngine {
         if (candidates.isEmpty()) return;
 
         int[] pos = candidates.get((int) (rand.getAsDouble() * candidates.size()));
-        long hasFarms = s.buildings.values().stream()
-                .filter(b -> b.owner == playerIdx && "farm".equals(b.type)).count();
-        String buildOrder;
-        if (hasFarms < 2) {
-            buildOrder = "farm";
-        } else if (rand.getAsDouble() < 0.4) {
-            buildOrder = "arrow_tower";
-        } else if (rand.getAsDouble() < 0.5) {
-            buildOrder = "infantry_barracks";
-        } else {
-            buildOrder = "archer_barracks";
-        }
-
         BuildingCfg cfg = GameConfig.BUILDING_TYPES.get(buildOrder);
-        if (cfg.buildable() && player.food >= cfg.buildCost() + 2000) {
+        if (cfg != null && cfg.buildable() && player.food >= cfg.buildCost() + buildThreshold(s) / 2) {
             buildStructure(s, playerIdx, pos[0], pos[1], buildOrder);
         }
     }
@@ -643,9 +785,13 @@ public final class SimEngine {
                 }
                 // 无单位可打时，攻击范围内敌方建筑
                 if (!u.attacked) {
-                    String[] prio = {"farm", "granary", "arrow_tower", "hq",
-                            "infantry_barracks", "archer_barracks", "lc_barracks", "hc_barracks",
-                            "supply_barracks", "wall", "watchtower"};
+                    String[] prio = isSmart(s)
+                            ? new String[]{"hq", "farm", "granary", "arrow_tower",
+                                    "infantry_barracks", "archer_barracks", "lc_barracks", "hc_barracks",
+                                    "supply_barracks", "wall", "watchtower"}
+                            : new String[]{"farm", "granary", "arrow_tower", "hq",
+                                    "infantry_barracks", "archer_barracks", "lc_barracks", "hc_barracks",
+                                    "supply_barracks", "wall", "watchtower"};
                     for (String ptype : prio) {
                         for (Map.Entry<String, Building> e : s.buildings.entrySet()) {
                             Building b = e.getValue();
@@ -664,31 +810,67 @@ public final class SimEngine {
             }
         }
 
-        // 补给兵跟随
-        for (Unit su : supplyUnits) {
-            if (su.moved) continue;
-            List<Unit> myCombat = new ArrayList<>();
+        // 补给兵调度交给 aiLogistics
+    }
+
+    static boolean isSmart(GameState s) {
+        String d = diffOf(s);
+        return "normal".equals(d) || "hard".equals(d) || "extreme".equals(d);
+    }
+
+    // AI 后勤：向储备低于 60% 的友军靠拢；全员充足时回己方粮仓补货
+    static void aiLogistics(GameState s, int playerIdx) {
+        List<Unit> supplies = new ArrayList<>();
+        for (Unit u : s.units) {
+            if (u.owner == playerIdx && "supply".equals(u.type) && !u.moved && u.moveCD == 0 && u.riverDelay == 0) {
+                supplies.add(u);
+            }
+        }
+        if (supplies.isEmpty()) return;
+
+        String granaryKey = null;
+        for (Map.Entry<String, Building> e : s.buildings.entrySet()) {
+            Building b = e.getValue();
+            if (b.owner == playerIdx && "granary".equals(b.type)) { granaryKey = e.getKey(); break; }
+        }
+
+        for (Unit su : supplies) {
+            List<Unit> needy = new ArrayList<>();
             for (Unit u : s.units) {
-                if (u.owner == playerIdx && !"supply".equals(u.type) && u.moved) myCombat.add(u);
+                if (u.owner != playerIdx || u.id == su.id) continue;
+                UnitCfg c = GameConfig.UNIT_TYPES.get(u.type);
+                if (c.foodCap() > 0 && u.supplies < c.foodCap() * 0.6) needy.add(u);
             }
-            if (!myCombat.isEmpty()) {
-                LinkedHashMap<Long, Integer> reachable = getReachableTiles(s, su, playerIdx);
-                int bestX = 0, bestY = 0;
-                long bestDist = Long.MAX_VALUE;
-                for (Unit combat : myCombat) {
-                    for (long rk : reachable.keySet()) {
-                        int rx = unpackX(rk), ry = unpackY(rk);
-                        if (rx == su.x && ry == su.y) continue;
-                        long d = dist(rx, ry, combat.x, combat.y);
-                        if (d < bestDist) {
-                            bestDist = d;
-                            bestX = rx;
-                            bestY = ry;
-                        }
-                    }
+            needy.sort((a, b) -> Integer.compare(dist(su.x, su.y, a.x, a.y), dist(su.x, su.y, b.x, b.y)));
+
+            int tx = -1, ty = -1;
+            if (!needy.isEmpty()) {
+                tx = needy.get(0).x;
+                ty = needy.get(0).y;
+            } else if (granaryKey != null) {
+                String[] p = granaryKey.split(",");
+                int gx = Integer.parseInt(p[0]), gy = Integer.parseInt(p[1]);
+                if (su.x == gx && su.y == gy) continue;
+                tx = gx;
+                ty = gy;
+            }
+            if (tx < 0) continue;
+            if (su.x == tx && su.y == ty) continue;
+
+            LinkedHashMap<Long, Integer> reachable = getReachableTiles(s, su, playerIdx);
+            int bestX = su.x, bestY = su.y;
+            int bestDist = dist(su.x, su.y, tx, ty);
+            for (long rk : reachable.keySet()) {
+                int rx = unpackX(rk), ry = unpackY(rk);
+                if (rx == su.x && ry == su.y) continue;
+                int d = dist(rx, ry, tx, ty);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestX = rx;
+                    bestY = ry;
                 }
-                if (bestDist != Long.MAX_VALUE) moveUnit(s, su, bestX, bestY);
             }
+            if (bestX != su.x || bestY != su.y) moveUnit(s, su, bestX, bestY);
         }
     }
 }

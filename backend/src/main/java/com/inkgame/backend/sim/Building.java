@@ -11,5 +11,7 @@ public class Building {
     public String type;
     public int owner;
     public int hp;
+    /** 产兵冷却：>0 表示还要等这么多回合才能再生产 */
+    public int cd;
     public Integer lastHitBy;
 }

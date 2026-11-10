@@ -1,13 +1,15 @@
 // 建筑系统
 
-import { BUILDING_TYPES, UNIT_TYPES, TERRAIN } from './config.js';
+import { BUILDING_TYPES, UNIT_TYPES, TERRAIN, BUILD_RULES } from './config.js';
 import { getTerrain, getBuilding, isPassable, dist } from './utils.js';
 import { getUnitsAt, spawnUnit, removeDeadUnits } from './units.js';
+import { isBuildVisibleToPlayer } from './vision.js';
 
 // ========== 建造 ==========
 
 export function getBuildRadius(state) {
-  return 3 + (state.turn - 1) * 2;
+  const r = BUILD_RULES.baseRadius + (state.turn - 1) * BUILD_RULES.radiusPerTurn;
+  return Math.min(r, Math.max(state.mapW, state.mapH));
 }
 
 export function isInBuildRange(state, x, y, playerIdx) {
@@ -17,13 +19,41 @@ export function isInBuildRange(state, x, y, playerIdx) {
   return Math.abs(x - player.hqX) <= r && Math.abs(y - player.hqY) <= r;
 }
 
-export function canBuildOn(state, x, y, playerIdx) {
+// 建造必须在自己当前视野内：看不见的地方不许起楼
+// 注意用的是「建」的视野——哨塔不提供建造视野，否则可以靠铺塔一路铺到对面家
+export function isInBuildVision(state, x, y, playerIdx) {
+  if (!BUILD_RULES.requireVision) return true;
+  return isBuildVisibleToPlayer(state, x, y, playerIdx);
+}
+
+export function countPlayerBuildings(state, playerIdx, type) {
+  let n = 0;
+  for (const [, b] of state.buildings) {
+    if (b.owner === playerIdx && b.type === type) n++;
+  }
+  return n;
+}
+
+// 返回不能建造的原因（供 UI 精确提示），可建造时返回 null
+// buildingType 可选：用于校验哨塔数量上限等单类型限制
+export function getBuildBlockReason(state, x, y, playerIdx, buildingType) {
+  if (!isInBuildRange(state, x, y, playerIdx)) return '超出建筑范围';
+  if (!isInBuildVision(state, x, y, playerIdx)) return '视野之外，无法建造';
   const t = getTerrain(state, x, y);
-  if (t !== TERRAIN.PLAIN && t !== TERRAIN.FERTILE) return false;
-  if (getBuilding(state, x, y)) return false;
-  if (getUnitsAt(state, x, y).length > 0) return false;
-  if (!isInBuildRange(state, x, y, playerIdx)) return false;
-  return true;
+  if (t !== TERRAIN.PLAIN && t !== TERRAIN.FERTILE) return '仅平原和沃土可建造';
+  if (getBuilding(state, x, y)) return '此处已有建筑';
+  if (getUnitsAt(state, x, y).length > 0) return '此处有部队驻扎';
+  if (buildingType === 'watchtower') {
+    const owned = countPlayerBuildings(state, playerIdx, 'watchtower');
+    if (owned >= BUILD_RULES.maxWatchtowers) {
+      return `哨塔已达上限（${BUILD_RULES.maxWatchtowers} 座）`;
+    }
+  }
+  return null;
+}
+
+export function canBuildOn(state, x, y, playerIdx, buildingType) {
+  return getBuildBlockReason(state, x, y, playerIdx, buildingType) === null;
 }
 
 // 获取玩家视野内所有可建造位置
@@ -47,7 +77,7 @@ export function buildStructure(state, playerIdx, x, y, buildingType) {
   const player = state.players[playerIdx];
   if (player.food < cfg.buildCost) return false;
   player.food -= cfg.buildCost;
-  state.buildings.set(`${x},${y}`, { type: buildingType, owner: playerIdx, hp: cfg.hp });
+  state.buildings.set(`${x},${y}`, { type: buildingType, owner: playerIdx, hp: cfg.hp, cd: 0 });
   // 建造效果反馈
   if (state.effects) {
     state.effects.push({ type: 'build', x, y, startTime: performance.now(), duration: 800 });
@@ -74,10 +104,17 @@ export function demolishStructure(state, playerIdx, x, y) {
 
 // ========== 生产 ==========
 
+// 产兵冷却：生产后要等 cd 回合才能再生产（cd 在回合开始递减）
+export function getProduceCooldown(state, buildingKey) {
+  const b = state.buildings.get(buildingKey);
+  return b ? (b.cd || 0) : 0;
+}
+
 export function canProduce(state, playerIdx, buildingKey) {
   const [bx, by] = buildingKey.split(',').map(Number);
   const b = state.buildings.get(buildingKey);
   if (!b || b.owner !== playerIdx) return null;
+  if ((b.cd || 0) > 0) return null;
   if (getUnitsAt(state, bx, by).some(u => u.owner !== playerIdx)) return null;
   return b.type;
 }
@@ -105,7 +142,8 @@ export function produceUnit(state, playerIdx, buildingKey, unitType) {
 
   player.food -= cfg.buildCost;
   spawnUnit(state, playerIdx, unitType, placeX, placeY);
-  state.actionMsg = `生产了${cfg.name}！`;
+  b.cd = cfg.produceTurns || 1;
+  state.actionMsg = `生产了${cfg.name}！（${b.cd} 回合后可再生产）`;
   return true;
 }
 
@@ -133,6 +171,8 @@ export function arrowTowerAttack(state) {
 }
 
 // ========== 粮仓：单位站上后，将玩家个人粮草转化为该单位储备 ==========
+// 换算率是全局一个数（BUILDING_TYPES.granary.granaryConv）：储备能通过补给兵 1:1 流通，
+// 各兵种用不同汇率就会产生"在便宜的兵种上买储备再倒卖"的套利，所以汇率必须唯一。
 
 export function granarySupply(state, unit) {
   const b = state.buildings.get(`${unit.x},${unit.y}`);
@@ -140,11 +180,12 @@ export function granarySupply(state, unit) {
   const cfg = UNIT_TYPES[unit.type];
   const player = state.players[unit.owner];
   if (!player) return;
+  const conv = BUILDING_TYPES.granary.granaryConv || 1;
   const needed = cfg.foodCap - unit.supplies;
   if (needed > 0 && player.food > 0) {
-    const give = Math.min(needed, player.food);
+    const give = Math.min(needed, player.food * conv);
     unit.supplies += give;
-    player.food -= give;
+    player.food -= Math.ceil(give / conv);
     state.actionMsg += `粮仓补充${give}粮草给${cfg.name}；`;
   }
 }

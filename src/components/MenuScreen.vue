@@ -6,10 +6,9 @@
     <div class="menu-item">
       <label>地图大小</label>
       <select v-model="mapSize">
-        <option :value="100">100×100</option>
-        <option :value="500">500×500</option>
-        <option :value="1000">1000×1000</option>
-        <option :value="2000">2000×2000</option>
+        <option :value="50">50×50（小 · 快节奏，约 10 回合接敌）</option>
+        <option :value="70">70×70（中 · 标准，约 15~20 回合接敌）</option>
+        <option :value="85">85×85（大 · 长局，30 回合后接敌）</option>
       </select>
     </div>
     <div class="menu-item">
@@ -21,10 +20,10 @@
     <div class="menu-item">
       <label>难度</label>
       <select v-model="difficulty">
-        <option value="easy">简单 — 普通AI，标准属性</option>
-        <option value="normal">普通 — 增强AI，属性+20%</option>
-        <option value="hard">困难 — 智能AI，属性+50%</option>
-        <option value="extreme">极难 — 巅峰AI，属性翻倍</option>
+        <option value="easy">简单 — 标准属性，AI 不懂后勤</option>
+        <option value="normal">普通 — 血+15% 攻+5%</option>
+        <option value="hard">困难 — 血+30% 攻+15%，会拆主营</option>
+        <option value="extreme">极难 — 血+50% 攻+25%，起始+4000 粮</option>
       </select>
     </div>
     <button class="start-btn" @click="$emit('start', mapSize, aiCount, difficulty)" :disabled="isCreating">
@@ -43,7 +42,7 @@ defineEmits(['start', 'load', 'tutorial']);
 defineProps({ isCreating: Boolean });
 
 const s = useSettings();
-const mapSize = ref(500);
+const mapSize = ref(70);
 const aiCount = ref(3);
 const difficulty = ref('easy');
 </script>

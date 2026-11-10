@@ -7,16 +7,45 @@ import { removeDeadUnits } from './units.js';
 export function collectFood(state) {
   const player = state.players[state.currentPlayer];
   let collected = 0;
+  const farmCfg = BUILDING_TYPES.farm;
   for (const [bkey, b] of state.buildings) {
     if (b.owner === state.currentPlayer && b.type === 'farm') {
       const [bx, by] = bkey.split(',').map(Number);
-      let amount = BUILDING_TYPES.farm.foodPerTurn || 3000;
-      if (getTerrain(state, bx, by) === TERRAIN.FERTILE) amount *= 3;
+      let amount = farmCfg.foodPerTurn || 1200;
+      if (getTerrain(state, bx, by) === TERRAIN.FERTILE) amount *= (farmCfg.fertileMul || 2);
       collected += amount;
     }
   }
   player.food += collected;
   return collected;
+}
+
+// 该玩家每回合的农田产出（含沃土加成），用于判断"养得起多大规模的军队"
+export function estimateFarmIncome(state, playerIdx) {
+  const farmCfg = BUILDING_TYPES.farm;
+  let total = 0;
+  for (const [bkey, b] of state.buildings) {
+    if (b.owner !== playerIdx || b.type !== 'farm') continue;
+    const [bx, by] = bkey.split(',').map(Number);
+    let amount = farmCfg.foodPerTurn || 1200;
+    if (getTerrain(state, bx, by) === TERRAIN.FERTILE) amount *= (farmCfg.fertileMul || 2);
+    total += amount;
+  }
+  return total;
+}
+
+// 该玩家全军每回合的维持开销（折算成粮草）：Σ troops × foodConsumeMul ÷ 粮仓换算率
+// 这是"军队规模"真正的成本函数——超过农田产出就无法长期维持
+export function estimateArmyUpkeep(state, playerIdx) {
+  const conv = BUILDING_TYPES.granary.granaryConv || 1;
+  let total = 0;
+  for (const u of state.units) {
+    if (u.owner !== playerIdx) continue;
+    const cfg = UNIT_TYPES[u.type];
+    if (!cfg || !cfg.foodConsumeMul) continue;
+    total += (u.troops * cfg.foodConsumeMul) / conv;
+  }
+  return total;
 }
 
 export function consumeUnitSupplies(state) {

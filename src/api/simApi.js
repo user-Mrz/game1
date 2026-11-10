@@ -12,6 +12,7 @@ export function buildSimRequest(state, seed) {
     nextUnitId: state.nextUnitId,
     seed,
     tutorialMode: !!state.tutorialMode,
+    difficulty: state.difficulty || 'easy',
     players: state.players.map(p => ({ ...p })),
     units: state.units.map(u => ({ ...u })),
     buildings: Array.from(state.buildings.entries()).map(([k, v]) => ({
@@ -19,6 +20,7 @@ export function buildSimRequest(state, seed) {
       type: v.type,
       owner: v.owner,
       hp: v.hp,
+      cd: v.cd || 0,
       ...(v.lastHitBy !== undefined ? { lastHitBy: v.lastHitBy } : {}),
     })),
   };

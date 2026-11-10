@@ -21,5 +21,6 @@ public class GameState {
     public String phase = "playing";
     public Integer winner = null;
     public boolean tutorialMode = false;
+    public String difficulty = "easy";
     public StringBuilder actionMsg = new StringBuilder();
 }

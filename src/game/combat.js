@@ -1,6 +1,6 @@
 // 战斗系统
 
-import { UNIT_TYPES, BUILDING_TYPES } from './config.js';
+import { UNIT_TYPES, BUILDING_TYPES, unitHungerMul } from './config.js';
 import { dist } from './utils.js';
 import { removeDeadUnits } from './units.js';
 
@@ -11,7 +11,14 @@ export function canAttack(state, attacker, defender) {
   const cfg = UNIT_TYPES[attacker.type];
   if (cfg.atkRange === 0) return false;
   const d = dist(attacker.x, attacker.y, defender.x, defender.y);
-  return d <= cfg.atkRange;
+  return d <= effectiveAtkRange(attacker, cfg);
+}
+
+// 有效攻击距离：弓兵移动后只能贴脸射击（moveShootRange），
+// 否则「后退1格再射」可以无限风筝所有 1 速近战，射程将无解
+function effectiveAtkRange(attacker, cfg) {
+  if (attacker.moved && cfg.moveShootRange) return Math.min(cfg.atkRange, cfg.moveShootRange);
+  return cfg.atkRange;
 }
 
 // ========== 冲锋与撤退 ==========
@@ -56,7 +63,8 @@ export function canRangedAttackBuilding(state, attacker, x, y) {
 export function resolveRangedCombat(state, attacker, defender) {
   const atkCfg = UNIT_TYPES[attacker.type];
   const defCfg = UNIT_TYPES[defender.type];
-  const atkPower = Math.floor(attacker.troops * atkCfg.atkPerTroop * (atkCfg.rangedAtkMul || 0.5));
+  // 饥兵系数：储备见底的部队打不动（见 config.js HUNGER_RULES）
+  const atkPower = Math.floor(attacker.troops * atkCfg.atkPerTroop * (atkCfg.rangedAtkMul || 0.5) * unitHungerMul(attacker));
   const defHP = defender.troops * defCfg.hpPerTroop;
 
   const damage = atkPower;
@@ -74,9 +82,9 @@ export function resolveRangedCombat(state, attacker, defender) {
   state.actionMsg = `${atkCfg.name}远程射击${defCfg.name}，造成${damage}伤害！`;
 
   if (defender.troops <= 0 && defender.type === 'supply') {
-    const killer = state.players[attacker.owner];
-    killer.food += (atkCfg.foodCap * 5);
-    attacker.supplies = atkCfg.foodCap;
+    // 按设计文档：断粮道只奖励「击杀者补满自身储备」，不额外投放玩家粮草。
+    // 原实现为 foodCap × 5，步兵击杀一次即得 30000 粮（≈25 回合农田产出），一次击杀直接定胜负。
+    attacker.supplies = UNIT_TYPES[attacker.type].foodCap;
   }
 
   if (defender.troops <= 0) {
@@ -91,7 +99,7 @@ export function resolveRangedBuildingCombat(state, attacker, x, y) {
   if (!b) return false;
   const atkCfg = UNIT_TYPES[attacker.type];
   const bCfg = BUILDING_TYPES[b.type];
-  const damage = Math.floor(attacker.troops * atkCfg.atkPerTroop * (atkCfg.rangedAtkMul || 0.5));
+  const damage = Math.floor(attacker.troops * atkCfg.atkPerTroop * (atkCfg.rangedAtkMul || 0.5) * unitHungerMul(attacker));
   b.hp = Math.max(0, b.hp - damage);
   b.lastHitBy = attacker.owner;
   attacker.attacked = true;
@@ -109,10 +117,11 @@ export function resolveRangedBuildingCombat(state, attacker, x, y) {
 export function resolveCombat(state, attacker, defender) {
   const atkCfg = UNIT_TYPES[attacker.type];
   const defCfg = UNIT_TYPES[defender.type];
-  const atkPower = attacker.troops * atkCfg.atkPerTroop;
+  // 攻击系数是小数（0.5 / 0.7 / 0.75 / 4），取整后与后端 Java 结算保持逐位一致
+  // 饥兵系数：储备见底的部队打不动（见 config.js HUNGER_RULES）
+  const damage = Math.floor(attacker.troops * atkCfg.atkPerTroop * unitHungerMul(attacker));
   const defHP = defender.troops * defCfg.hpPerTroop;
 
-  const damage = atkPower;
   const remainingHP = Math.max(0, defHP - damage);
   const remainingTroops = Math.ceil(remainingHP / defCfg.hpPerTroop);
 
@@ -126,12 +135,9 @@ export function resolveCombat(state, attacker, defender) {
 
   state.actionMsg = `${UNIT_TYPES[attacker.type].name}攻击${UNIT_TYPES[defender.type].name}，造成${damage}伤害！`;
 
-  // 击杀后勤补给兵奖励
+  // 击杀后勤补给兵奖励：只补满击杀者自身储备（同设计文档）
   if (defender.troops <= 0 && defender.type === 'supply') {
-    const atkCfg2 = UNIT_TYPES[attacker.type];
-    const killer = state.players[attacker.owner];
-    killer.food += (atkCfg2.foodCap * 5);
-    attacker.supplies = atkCfg2.foodCap;
+    attacker.supplies = UNIT_TYPES[attacker.type].foodCap;
   }
 
   if (defender.troops <= 0) {
@@ -150,7 +156,7 @@ export function canAttackBuilding(state, attacker, x, y) {
   if (attacker.attacked) return false;
   const cfg = UNIT_TYPES[attacker.type];
   if (cfg.atkRange === 0) return false;
-  return dist(attacker.x, attacker.y, x, y) <= cfg.atkRange;
+  return dist(attacker.x, attacker.y, x, y) <= effectiveAtkRange(attacker, cfg);
 }
 
 export function resolveBuildingCombat(state, attacker, x, y) {
@@ -158,7 +164,7 @@ export function resolveBuildingCombat(state, attacker, x, y) {
   if (!b) return false;
   const atkCfg = UNIT_TYPES[attacker.type];
   const bCfg = BUILDING_TYPES[b.type];
-  const damage = attacker.troops * atkCfg.atkPerTroop;
+  const damage = Math.floor(attacker.troops * atkCfg.atkPerTroop * unitHungerMul(attacker));
   b.hp = Math.max(0, b.hp - damage);
   b.lastHitBy = attacker.owner;
   attacker.attacked = true;

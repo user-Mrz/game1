@@ -1,38 +1,54 @@
 // 视野 & 战争迷雾
 
-import { TERRAIN, UNIT_TYPES } from './config.js';
+import { TERRAIN, UNIT_TYPES, BUILDING_TYPES, BUILD_RULES } from './config.js';
 import { getTerrain, dist } from './utils.js';
 
-export function isVisibleToPlayer(state, x, y, playerIdx) {
-  const player = state.players[playerIdx];
-  if (!player || !player.alive) return false;
-
-  // 哨塔 3 格半径
-  for (const [bkey, b] of state.buildings) {
-    if (b.owner === playerIdx && b.type === 'watchtower') {
-      const [bx, by] = bkey.split(',').map(Number);
-      if (dist(x, y, bx, by) <= 3) return true;
-    }
-  }
-
-  // 己方建筑 9 宫格
-  for (const [bkey, b] of state.buildings) {
-    if (b.owner === playerIdx && b.type !== 'watchtower') {
-      const [bx, by] = bkey.split(',').map(Number);
-      if (Math.abs(x - bx) <= 1 && Math.abs(y - by) <= 1) return true;
-    }
-  }
-
-  // 己方兵种：视野 = 移动速度 × 3（切比雪夫距离，方形视野）
+// 兵种视野 = 移动力 × 3（切比雪夫方形）
+function unitVisionAt(state, x, y, playerIdx) {
   for (const u of state.units) {
-    if (u.owner === playerIdx) {
-      const cfg = UNIT_TYPES[u.type];
-      const r = cfg ? cfg.move * 3 : 3;
-      if (Math.abs(x - u.x) <= r && Math.abs(y - u.y) <= r) return true;
+    if (u.owner !== playerIdx) continue;
+    const cfg = UNIT_TYPES[u.type];
+    const r = cfg ? cfg.move * 3 : 3;
+    if (Math.abs(x - u.x) <= r && Math.abs(y - u.y) <= r) return true;
+  }
+  return false;
+}
+
+// 建筑视野：普通建筑 9 宫格，哨塔额外 8 格（曼哈顿）
+function buildingVisionAt(state, x, y, playerIdx) {
+  const watchRadius = BUILDING_TYPES.watchtower.visionRadius || 3;
+  for (const [bkey, b] of state.buildings) {
+    if (b.owner !== playerIdx) continue;
+    const [bx, by] = bkey.split(',').map(Number);
+    if (b.type === 'watchtower') {
+      if (dist(x, y, bx, by) <= watchRadius) return true;
+    } else if (Math.abs(x - bx) <= 1 && Math.abs(y - by) <= 1) {
+      return true;
     }
   }
-
   return false;
+}
+
+function isAlivePlayer(state, playerIdx) {
+  const player = state.players[playerIdx];
+  return !!(player && player.alive);
+}
+
+// 「看」的视野：建筑 + 兵种，用于战争迷雾与发现敌人
+export function isVisibleToPlayer(state, x, y, playerIdx) {
+  if (!isAlivePlayer(state, playerIdx)) return false;
+  return buildingVisionAt(state, x, y, playerIdx) || unitVisionAt(state, x, y, playerIdx);
+}
+
+// 「建」的视野：默认只由兵种提供（建筑不自我滚动），主营可单独开 1 格豁免。
+export function isBuildVisibleToPlayer(state, x, y, playerIdx) {
+  if (!isAlivePlayer(state, playerIdx)) return false;
+  if (BUILD_RULES.hqGrantsBuildVision) {
+    const p = state.players[playerIdx];
+    if (Math.abs(x - p.hqX) <= 1 && Math.abs(y - p.hqY) <= 1) return true;
+  }
+  if (BUILD_RULES.buildingGrantsBuildVision && buildingVisionAt(state, x, y, playerIdx)) return true;
+  return unitVisionAt(state, x, y, playerIdx);
 }
 
 export function isUnitVisibleToPlayer(state, unit, playerIdx) {

@@ -43,7 +43,12 @@
     </div>
 
     <div v-if="d.unit" class="unit-sec">
-      <div class="unit-title">可产兵种 · {{ d.unit.name }}</div>
+      <div class="unit-title">
+        可产兵种 · {{ d.unit.name }}
+        <span class="cd-tag" :class="{ cooling: d.unit.produceCd > 0 }">
+          {{ d.unit.produceCd > 0 ? `整备中 ${d.unit.produceCd} 回合` : `${d.unit.produceTurns} 回合/个` }}
+        </span>
+      </div>
       <div class="grid">
         <div class="item">
           <label>兵力</label>
@@ -146,5 +151,20 @@ watch(d, (val) => initWhenVisible(!!val), { immediate: true });
   margin-top: 8px; padding-top: 6px; border-top: 1px dotted rgba(0,0,0,0.2);
   color: #555; font-size: 11px; text-align: center;
   font-family: 'Noto Serif SC',serif;
+}
+.cd-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 11px;
+  border: 1px solid rgba(0,0,0,0.35);
+  border-radius: 2px;
+  color: #444;
+  letter-spacing: 0;
+}
+.cd-tag.cooling {
+  color: #b03a2e;
+  border-color: rgba(176,58,46,0.5);
+  background: rgba(176,58,46,0.08);
 }
 </style>
